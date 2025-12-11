@@ -1,0 +1,25 @@
+# виртуальное окружение
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# env-файл с секретами
+.env
+
+# временное хранилище файлов
+storage/
+
+# IDE/редакторы
+.vscode/
+.idea/
+
+# системное
+.DS_Store
+Thumbs.db
+
+# alembic кэш (если появится)
+alembic.ini~
