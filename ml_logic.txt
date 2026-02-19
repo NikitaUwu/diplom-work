@@ -1,0 +1,1976 @@
+
+--- FILE: flatted.py ---
+# ISC License
+#
+# Copyright (c) 2018-2025, Andrea Giammarchi, @WebReflection
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+# REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+# AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+# INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+# LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
+# OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+# PERFORMANCE OF THIS SOFTWARE.
+
+import json as _json
+
+class _Known:
+    def __init__(self):
+        self.key = []
+        self.value = []
+
+class _String:
+    def __init__(self, value):
+        self.value = value
+
+
+def _array_keys(value):
+    keys = []
+    i = 0
+    for _ in value:
+        keys.append(i)
+        i += 1
+    return keys
+
+def _object_keys(value):
+    keys = []
+    for key in value:
+        keys.append(key)
+    return keys
+
+def _is_array(value):
+    return isinstance(value, (list, tuple))
+
+def _is_object(value):
+    return isinstance(value, dict)
+
+def _is_string(value):
+    return isinstance(value, str)
+
+def _index(known, input, value):
+    input.append(value)
+    index = str(len(input) - 1)
+    known.key.append(value)
+    known.value.append(index)
+    return index
+
+def _loop(keys, input, known, output):
+    for key in keys:
+        value = output[key]
+        if isinstance(value, _String):
+            _ref(key, input[int(value.value)], input, known, output)
+
+    return output
+
+def _ref(key, value, input, known, output):
+    if _is_array(value) and value not in known:
+        known.append(value)
+        value = _loop(_array_keys(value), input, known, value)
+    elif _is_object(value) and value not in known:
+        known.append(value)
+        value = _loop(_object_keys(value), input, known, value)
+
+    output[key] = value
+
+def _relate(known, input, value):
+    if _is_string(value) or _is_array(value) or _is_object(value):
+        try:
+            return known.value[known.key.index(value)]
+        except:
+            return _index(known, input, value)
+
+    return value
+
+def _transform(known, input, value):
+    if _is_array(value):
+        output = []
+        for val in value:
+            output.append(_relate(known, input, val))
+        return output
+
+    if _is_object(value):
+        obj = {}
+        for key in value:
+            obj[key] = _relate(known, input, value[key])
+        return obj
+
+    return value
+
+def _wrap(value):
+    if _is_string(value):
+        return _String(value)
+
+    if _is_array(value):
+        i = 0
+        for val in value:
+            value[i] = _wrap(val)
+            i += 1
+
+    elif _is_object(value):
+        for key in value:
+            value[key] = _wrap(value[key])
+
+    return value
+
+def parse(value, *args, **kwargs):
+    json = _json.loads(value, *args, **kwargs)
+    wrapped = []
+    for value in json:
+        wrapped.append(_wrap(value))
+
+    input = []
+    for value in wrapped:
+        if isinstance(value, _String):
+            input.append(value.value)
+        else:
+            input.append(value)
+
+    value = input[0]
+
+    if _is_array(value):
+        return _loop(_array_keys(value), input, [value], value)
+
+    if _is_object(value):
+        return _loop(_object_keys(value), input, [value], value)
+
+    return value
+
+
+def stringify(value, *args, **kwargs):
+    known = _Known()
+    input = []
+    output = []
+    i = int(_index(known, input, value))
+    while i < len(input):
+        output.append(_transform(known, input, input[i]))
+        i += 1
+    return _json.dumps(output, *args, **kwargs)
+
+==============================
+
+--- FILE: download_google_fonts.py ---
+import os
+
+import requests
+
+dir_out = ".circleci/fonts/truetype/googleFonts/"
+
+
+def download(repo, family, types, overwrite=True):
+    for t in types:
+        name = family + t + ".ttf"
+        url = repo + name + "?raw=true"
+        out_file = dir_out + name
+        print("Getting: ", url)
+        if os.path.exists(out_file) and not overwrite:
+            print("    => Already exists: ", out_file)
+            continue
+        req = requests.get(url, allow_redirects=False)
+        if req.status_code != 200:
+            # If we get a redirect, print an error so that we know to update the URL
+            if req.status_code == 302 or req.status_code == 301:
+                new_url = req.headers.get("Location")
+                print(f"    => Redirected -- please update URL to: {new_url}")
+            raise RuntimeError(f"""
+Download failed.
+Status code: {req.status_code}
+Message: {req.reason}
+""")
+        open(out_file, "wb").write(req.content)
+
+
+download(
+    "https://cdn.jsdelivr.net/gh/notofonts/notofonts.github.io/fonts/NotoSansMono/hinted/ttf/",
+    "NotoSansMono",
+    ["-Regular", "-Bold"],
+)
+
+download(
+    "https://cdn.jsdelivr.net/gh/notofonts/notofonts.github.io/fonts/NotoSans/hinted/ttf/",
+    "NotoSans",
+    ["-Regular", "-Italic", "-Bold"],
+)
+
+download(
+    "https://cdn.jsdelivr.net/gh/notofonts/notofonts.github.io/fonts/NotoSerif/hinted/ttf/",
+    "NotoSerif",
+    [
+        "-Regular",
+        "-Italic",
+        "-Bold",
+        "-BoldItalic",
+    ],
+)
+
+download(
+    "https://raw.githubusercontent.com/google/fonts/refs/heads/main/ofl/oldstandardtt/",
+    "OldStandard",
+    ["-Regular", "-Italic", "-Bold"],
+)
+
+download(
+    "https://raw.githubusercontent.com/google/fonts/refs/heads/main/ofl/ptsansnarrow/",
+    "PT_Sans-Narrow-Web",
+    ["-Regular", "-Bold"],
+)
+
+download(
+    "https://raw.githubusercontent.com/impallari/Raleway/refs/heads/master/fonts/v3.000%20Fontlab/TTF/",
+    "Raleway",
+    ["-Regular", "-Regular-Italic", "-Bold", "-Bold-Italic"],
+)
+
+download(
+    "https://raw.githubusercontent.com/googlefonts/roboto-2/refs/heads/main/src/hinted/",
+    "Roboto",
+    ["-Regular", "-Italic", "-Bold", "-BoldItalic"],
+)
+
+download(
+    "https://raw.githubusercontent.com/expo/google-fonts/refs/heads/main/font-packages/gravitas-one/400Regular/",
+    "GravitasOne",
+    ["_400Regular"],
+)
+
+==============================
+
+--- FILE: run_smoke_modal.py ---
+from __future__ import annotations
+
+import json
+import shutil
+import uuid
+from datetime import datetime
+from pathlib import Path
+
+from plextract import extract
+
+IMG_EXTS = {".png", ".jpg", ".jpeg"}
+
+
+def main() -> int:
+    # Рабочая папка: та, из которой ты запускаешь скрипт.
+    # Ожидаем, что здесь есть общий input/ с тестовыми картинками.
+    cwd = Path.cwd()
+    base_input = cwd / "input"
+
+    if not base_input.exists():
+        print(f"[ERROR] Не найдена папка: {base_input}")
+        print("Создай её и положи туда хотя бы одно изображение с линейным графиком.")
+        return 1
+
+    images = [p for p in base_input.iterdir() if p.is_file() and p.suffix.lower() in IMG_EXTS]
+    if not images:
+        print(f"[ERROR] В папке {base_input} нет изображений .png/.jpg/.jpeg")
+        return 1
+
+    # Уникальная папка запуска
+    run_tag = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    run_root = cwd / "runs" / run_tag
+    run_input = run_root / "input"
+    run_output = run_root / "output"
+
+    run_input.mkdir(parents=True, exist_ok=False)
+    run_output.mkdir(parents=True, exist_ok=False)
+
+    # Копируем входные файлы в run_input, чтобы запуск был изолированным
+    print("[INFO] Копирую входные файлы в:", run_input)
+    for p in images:
+        shutil.copy2(p, run_input / p.name)
+
+    print("\n[INFO] Запускаю plextract (backend='modal')...")
+    print("       input_dir =", run_input)
+    print("       output_dir =", run_output)
+
+    # Важно: передаём абсолютные/явные пути, чтобы не зависеть от текущей папки
+    ret = extract(input_dir=str(run_input), output_dir=str(run_output), backend="modal")
+    print("[INFO] extract() вернул:", ret)
+
+    # Ищем converted_datapoints/data.json внутри run_output
+    data_files = [p for p in run_output.rglob("data.json") if "converted_datapoints" in p.parts]
+    if not data_files:
+        print("\n[ERROR] Не нашёл converted_datapoints/data.json в", run_output)
+        print("Смотри содержимое run_output и логи выше.")
+        return 2
+
+    print("\n[INFO] Найдены результаты:")
+    for p in data_files:
+        print("  -", p)
+
+    # Печать краткой структуры первого data.json
+    sample = data_files[0]
+    with sample.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    print("\n[INFO] Пример содержимого data.json (верхний уровень):")
+    if isinstance(payload, dict):
+        keys = list(payload.keys())
+        print("keys =", keys)
+        series_keys = [k for k in keys if k.startswith("series")]
+        if series_keys:
+            print("series keys =", series_keys)
+            v0 = payload.get(series_keys[0])
+            if isinstance(v0, list):
+                print(f"{series_keys[0]} points =", len(v0))
+    else:
+        print("Тип data.json:", type(payload))
+
+    print(f"\n[OK] Run сохранён в: {run_root}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+==============================
+
+--- FILE: sobiralka.py ---
+import os
+
+# Список папок, которые НЕ нужно сканировать
+EXCLUDE_DIRS = {'venv', '.git', '__pycache__', 'checkpoints', 'data', 'models_weights'}
+# Список расширений файлов, содержимое которых нам интересно
+INCLUDE_EXTENSIONS = {'.py', '.env', '.example', '.txt', '.yml', '.yaml'}
+# Максимальный размер файла для чтения (чтобы не читать веса ML моделей), 50 КБ
+MAX_FILE_SIZE = 100 * 1024 
+
+def collect_project_info(root_dir, output_file):
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(f"Project Structure for: {root_dir}\n")
+        f.write("="*50 + "\n\n")
+
+        for root, dirs, files in os.walk(root_dir):
+            # Фильтруем папки
+            dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+            
+            level = root.replace(root_dir, '').count(os.sep)
+            indent = ' ' * 4 * level
+            f.write(f"{indent}{os.path.basename(root)}/\n")
+            
+            sub_indent = ' ' * 4 * (level + 1)
+            for file in files:
+                f.write(f"{sub_indent}{file}\n")
+                
+        f.write("\n" + "="*50 + "\n")
+        f.write("FILE CONTENTS\n")
+        f.write("="*50 + "\n\n")
+
+        for root, dirs, files in os.walk(root_dir):
+            dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+            for file in files:
+                file_path = os.path.join(root, file)
+                ext = os.path.splitext(file)[1]
+                
+                # Проверяем, стоит ли читать содержимое файла
+                if ext in INCLUDE_EXTENSIONS or file.startswith('.env'):
+                    try:
+                        size = os.path.getsize(file_path)
+                        if size > MAX_FILE_SIZE:
+                            continue
+                            
+                        f.write(f"\n--- FILE: {os.path.relpath(file_path, root_dir)} ---\n")
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as content_f:
+                            f.write(content_f.read())
+                        f.write("\n" + "-"*30 + "\n")
+                    except Exception as e:
+                        f.write(f"Could not read {file}: {e}\n")
+
+if __name__ == "__main__":
+    # Укажи здесь путь к папке ml-worker
+    # Если скрипт лежит в корне (diplom-work), то путь будет 'ml-worker'
+    target_folder = "ml-worker" 
+    
+    current_dir = os.path.join(os.getcwd(), target_folder)
+    
+    if not os.path.exists(current_dir):
+        print(f"Ошибка: Папка {target_folder} не найдена в {os.getcwd()}")
+    else:
+        output_name = "ml_summary.txt"
+        collect_project_info(current_dir, output_name)
+        print(f"Готово! Информация по ML собрана в файл: {output_name}")
+==============================
+
+--- FILE: sobirlka_logic.py ---
+import os
+
+# Ищем только эти файлы
+TARGET_FILES = ['main.py', 'worker.py', 'inference.py', 'predict.py', 'pipeline.py', 'requirements.txt']
+
+def collect_ml_core(root_dir):
+    with open("ml_logic.txt", "w", encoding="utf-8") as out:
+        for root, dirs, files in os.walk(root_dir):
+            # Пропускаем лишние папки сразу
+            if any(x in root for x in ['venv', 'data', 'datasets', 'models', '__pycache__']):
+                continue
+                
+            for file in files:
+                if file in TARGET_FILES or file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    # Читаем только если файл меньше 30 КБ (настоящий код обычно такой)
+                    if os.path.getsize(file_path) < 30 * 1024:
+                        out.write(f"\n--- FILE: {file} ---\n")
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            out.write(f.read())
+                        out.write("\n" + "="*30 + "\n")
+
+collect_ml_core(".")
+print("Готово! Посмотри файл ml_logic.txt")
+==============================
+
+--- FILE: worker_modal.py ---
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import psycopg2
+from dotenv import load_dotenv
+from psycopg2.extras import Json, RealDictCursor
+
+from plextract import extract
+
+# Чтобы меньше ловить Windows-ошибок кодировок при вызовах CLI
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+
+@dataclass
+class Job:
+    chart_id: int
+    original_path: str
+
+
+class PipelineError(Exception):
+    def __init__(self, message: str, artifacts: dict[str, str] | None = None):
+        super().__init__(message)
+        self.artifacts = artifacts or {}
+
+
+def _normalize_db_url(url: str) -> str:
+    # SQLAlchemy URL -> psycopg2 URL
+    return url.replace("postgresql+psycopg2://", "postgresql://", 1)
+
+
+def _connect():
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL is not set (check ml-worker/.env)")
+    db_url = _normalize_db_url(db_url)
+    conn = psycopg2.connect(db_url)
+    conn.autocommit = False
+    return conn
+
+
+def _fetch_one_and_mark_processing(conn) -> Optional[Job]:
+    """
+    Берём одну задачу (status='uploaded') и атомарно переводим в processing.
+    SKIP LOCKED позволяет запускать несколько воркеров без конфликтов.
+    """
+    with conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, original_path
+                FROM charts
+                WHERE status = %s
+                ORDER BY created_at ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+                """,
+                ("uploaded",),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+
+            chart_id = int(row["id"])
+            cur.execute(
+                """
+                UPDATE charts
+                SET status = %s,
+                    error_message = NULL
+                WHERE id = %s
+                """,
+                ("processing", chart_id),
+            )
+
+            return Job(
+                chart_id=chart_id,
+                original_path=str(row["original_path"]),
+            )
+
+
+def _mark_done(conn, chart_id: int, result_json: Dict[str, Any], n_panels: int, n_series: int) -> None:
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE charts
+                SET status = %s,
+                    result_json = %s,
+                    n_panels = %s,
+                    n_series = %s,
+                    processed_at = NOW(),
+                    error_message = NULL
+                WHERE id = %s
+                """,
+                ("done", Json(result_json), n_panels, n_series, chart_id),
+            )
+
+
+def _mark_error(conn, chart_id: int, message: str, result_json: Optional[Dict[str, Any]] = None) -> None:
+    with conn:
+        with conn.cursor() as cur:
+            if result_json is None:
+                cur.execute(
+                    """
+                    UPDATE charts
+                    SET status = %s,
+                        error_message = %s,
+                        processed_at = NOW()
+                    WHERE id = %s
+                    """,
+                    ("error", message[:2000], chart_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE charts
+                    SET status = %s,
+                        error_message = %s,
+                        processed_at = NOW(),
+                        result_json = %s
+                    WHERE id = %s
+                    """,
+                    ("error", message[:2000], Json(result_json), chart_id),
+                )
+
+
+def _get_storage_dir_from_original(original_path: Path) -> Path:
+    """
+    Где хранить артефакты.
+    1) Если задан STORAGE_DIR в env — используем его
+    2) Иначе берём родителя папки user_<id> (т.е. storage/)
+       original_path обычно: storage/user_<id>/<sha>.<ext>
+    """
+    env = os.getenv("STORAGE_DIR")
+    if env:
+        return Path(env).resolve()
+    return original_path.resolve().parent.parent
+
+
+def _first_match(root: Path, pattern: str, must_contain_part: str) -> Optional[Path]:
+    candidates = [p for p in root.rglob(pattern) if must_contain_part in p.parts]
+    return candidates[0] if candidates else None
+
+
+def _pick_latest(paths: list[Path]) -> Optional[Path]:
+    if not paths:
+        return None
+    return max(paths, key=lambda p: p.stat().st_mtime)
+
+
+def _collect_and_copy_artifacts(run_root: Path, chart_id: int, storage_dir: Path) -> dict[str, str]:
+    """
+    Копируем артефакты в storage/charts/<chart_id>/...
+    Возвращаем мапу: {key: "relative/path/from/storage"}
+    """
+    dest_base = storage_dir / "charts" / str(chart_id)
+    dest_base.mkdir(parents=True, exist_ok=True)
+
+    artifacts: dict[str, str] = {}
+
+    # Ищем строго внутри run_root/output (там лежат скачанные результаты)
+    search_root = run_root / "output"
+    if not search_root.exists():
+        return artifacts
+
+    # lineformer/prediction.png
+    lf_candidates = [p for p in search_root.rglob("prediction.png") if "lineformer" in p.parts]
+    src = _pick_latest(lf_candidates)
+    if src:
+        dst_dir = dest_base / "lineformer"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / src.name
+        shutil.copy2(src, dst)
+        artifacts["lineformer_prediction"] = dst.relative_to(storage_dir).as_posix()
+
+    # chartdete/predictions.*
+    cd_candidates = [p for p in search_root.rglob("predictions.*") if "chartdete" in p.parts]
+    src = _pick_latest(cd_candidates)
+    if src:
+        dst_dir = dest_base / "chartdete"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / src.name
+        shutil.copy2(src, dst)
+        artifacts["chartdete_predictions"] = dst.relative_to(storage_dir).as_posix()
+
+    # converted_datapoints/plot.png (есть только если создан)
+    plot_candidates = [p for p in search_root.rglob("plot.png") if "converted_datapoints" in p.parts]
+    src = _pick_latest(plot_candidates)
+    if src:
+        dst_dir = dest_base / "converted_datapoints"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / src.name
+        shutil.copy2(src, dst)
+        artifacts["converted_plot"] = dst.relative_to(storage_dir).as_posix()
+
+    return artifacts
+
+
+def _find_converted_data_json(search_root: Path) -> Path:
+    candidates = [p for p in search_root.rglob("data.json") if "converted_datapoints" in p.parts]
+    if not candidates:
+        raise RuntimeError("converted_datapoints/data.json not found in extracted artifacts")
+    return candidates[0]
+
+
+def _parse_points(payload: Any) -> Dict[str, List[Tuple[float, float]]]:
+    if not isinstance(payload, dict):
+        raise RuntimeError("Unexpected data.json format: expected JSON object")
+
+    out: Dict[str, List[Tuple[float, float]]] = {}
+
+    for key, value in payload.items():
+        if not str(key).startswith("series"):
+            continue
+        if not isinstance(value, list):
+            continue
+
+        pts: List[Tuple[float, float]] = []
+        for item in value:
+            x = y = None
+
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                x, y = item[0], item[1]
+            elif isinstance(item, dict):
+                x = item.get("x", item.get("X"))
+                y = item.get("y", item.get("Y"))
+
+            if x is None or y is None:
+                continue
+
+            try:
+                pts.append((float(x), float(y)))
+            except Exception:
+                continue
+
+        if pts:
+            out[str(key)] = pts
+
+    if not out:
+        raise RuntimeError("No series_* points found in data.json")
+    return out
+
+
+def _to_backend_result(series_points: Dict[str, List[Tuple[float, float]]]) -> Dict[str, Any]:
+    series_list = []
+    for sid, pts in series_points.items():
+        series_list.append(
+            {
+                "id": sid,
+                "name": sid,
+                "style": None,
+                "points": pts,
+            }
+        )
+
+    panel = {
+        "id": "panel_0",
+        "x_scale": "linear",
+        "y_scale": "linear",
+        "x_unit": None,
+        "y_unit": None,
+        "series": series_list,
+    }
+
+    return {"panels": [panel], "ml_meta": None}
+
+
+def _run_plextract(chart_id: int, original_path: Path, work_dir: Path) -> Tuple[Dict[str, Any], int, int]:
+    run_tag = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+
+    run_root = work_dir / f"chart_{chart_id}" / run_tag
+    input_dir = run_root / "input"
+    output_dir = run_root / "output"
+
+    input_dir.mkdir(parents=True, exist_ok=False)
+    output_dir.mkdir(parents=True, exist_ok=False)
+
+    # Копируем 1 файл в input_dir (изолируем запуск)
+    shutil.copy2(original_path, input_dir / original_path.name)
+
+    # Запуск через Modal
+    extract(input_dir=str(input_dir), output_dir=str(output_dir), backend="modal")
+
+    # Всегда собираем/копируем артефакты в storage/charts/<chart_id>/...
+    storage_dir = _get_storage_dir_from_original(original_path)
+    artifacts = _collect_and_copy_artifacts(run_root, chart_id, storage_dir)
+
+    # Пытаемся достать data.json и распарсить точки
+    try:
+        data_path = _find_converted_data_json(run_root)
+        with data_path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        series_points = _parse_points(payload)
+    except Exception as e:
+        raise PipelineError(str(e), artifacts)
+
+    result_json = _to_backend_result(series_points)
+    result_json["artifacts"] = artifacts
+
+    n_panels = 1
+    n_series = len(series_points)
+    print("[WORKER] artifacts:", artifacts)
+    return result_json, n_panels, n_series
+
+
+def main() -> int:
+    load_dotenv(Path(__file__).with_name(".env"))
+
+    poll_interval = float(os.getenv("POLL_INTERVAL", "2"))
+    work_dir = Path(os.getenv("WORK_DIR", str(Path.cwd() / "runs" / "worker"))).resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    conn = _connect()
+    print("[WORKER] started; work_dir =", work_dir)
+
+    while True:
+        job = _fetch_one_and_mark_processing(conn)
+        if not job:
+            time.sleep(poll_interval)
+            continue
+
+        chart_id = job.chart_id
+
+        try:
+            original_path = Path(job.original_path)
+            if not original_path.exists():
+                raise RuntimeError(f"Original file not found: {original_path}")
+
+            result_json, n_panels, n_series = _run_plextract(chart_id, original_path, work_dir)
+            _mark_done(conn, chart_id, result_json, n_panels, n_series)
+            print(f"[WORKER] chart {chart_id}: DONE (series={n_series})")
+
+        except PipelineError as e:
+            _mark_error(conn, chart_id, str(e), result_json={"artifacts": e.artifacts})
+            print(f"[WORKER] chart {chart_id}: ERROR (with artifacts) -> {e}")
+
+        except Exception as e:
+            _mark_error(conn, chart_id, str(e))
+            print(f"[WORKER] chart {chart_id}: ERROR -> {e}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+==============================
+
+--- FILE: env.py ---
+import os
+import sys
+from logging.config import fileConfig
+
+from sqlalchemy import engine_from_config, pool
+from alembic import context
+
+# Добавляем путь к backend/, чтобы можно было импортировать app.*
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+from app.core.config import settings
+from app.db.base import Base
+from app.db.models import user, chart  # noqa: F401  # важно импортировать модели
+
+
+# this is the Alembic Config object, which provides
+# access to the values within the .ini file in use.
+config = context.config
+# Подменяем sqlalchemy.url на URL из настроек приложения
+config.set_main_option("sqlalchemy.url", settings.database_url)
+
+# Interpret the config file for Python logging.
+# This line sets up loggers basically.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+# add your model's MetaData object here
+# for 'autogenerate' support
+# from myapp import mymodel
+# target_metadata = mymodel.Base.metadata
+target_metadata = Base.metadata
+
+# other values from the config, defined by the needs of env.py,
+# can be acquired:
+# my_important_option = config.get_main_option("my_important_option")
+# ... etc.
+
+
+def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode.
+
+    This configures the context with just a URL
+    and not an Engine, though an Engine is acceptable
+    here as well.  By skipping the Engine creation
+    we don't even need a DBAPI to be available.
+
+    Calls to context.execute() here emit the given string to the
+    script output.
+
+    """
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode.
+
+    In this scenario we need to create an Engine
+    and associate a connection with the context.
+
+    """
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+
+==============================
+
+--- FILE: 38b1f13b029e_add_chart_status.py ---
+"""add chart status
+
+Revision ID: 38b1f13b029e
+Revises: 6fb088b51b6e
+Create Date: 2025-12-16 03:17:41.923525
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+# revision identifiers, used by Alembic.
+revision: str = '38b1f13b029e'
+down_revision: Union[str, Sequence[str], None] = '6fb088b51b6e'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    """Upgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.alter_column('charts', 'original_path',
+               existing_type=sa.VARCHAR(length=500),
+               type_=sa.String(length=1024),
+               existing_nullable=False)
+    op.alter_column('charts', 'result_json',
+               existing_type=postgresql.JSON(astext_type=sa.Text()),
+               type_=postgresql.JSONB(astext_type=sa.Text()),
+               existing_nullable=True)
+    op.drop_index(op.f('ix_charts_status'), table_name='charts')
+    op.create_index(op.f('ix_charts_user_id'), 'charts', ['user_id'], unique=False)
+    op.drop_constraint(op.f('charts_user_id_fkey'), 'charts', type_='foreignkey')
+    op.drop_column('charts', 'preview_path')
+    # ### end Alembic commands ###
+
+
+def downgrade() -> None:
+    """Downgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.add_column('charts', sa.Column('preview_path', sa.VARCHAR(length=500), autoincrement=False, nullable=True))
+    op.create_foreign_key(op.f('charts_user_id_fkey'), 'charts', 'users', ['user_id'], ['id'])
+    op.drop_index(op.f('ix_charts_user_id'), table_name='charts')
+    op.create_index(op.f('ix_charts_status'), 'charts', ['status'], unique=False)
+    op.alter_column('charts', 'result_json',
+               existing_type=postgresql.JSONB(astext_type=sa.Text()),
+               type_=postgresql.JSON(astext_type=sa.Text()),
+               existing_nullable=True)
+    op.alter_column('charts', 'original_path',
+               existing_type=sa.String(length=1024),
+               type_=sa.VARCHAR(length=500),
+               existing_nullable=False)
+    # ### end Alembic commands ###
+
+==============================
+
+--- FILE: 6fb088b51b6e_init_schema.py ---
+"""init schema
+
+Revision ID: 6fb088b51b6e
+Revises: 
+Create Date: 2025-12-11 14:41:10.412272
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+
+# revision identifiers, used by Alembic.
+revision: str = '6fb088b51b6e'
+down_revision: Union[str, Sequence[str], None] = None
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    """Upgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.create_table('users',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('email', sa.String(length=255), nullable=False),
+    sa.Column('hashed_password', sa.String(length=255), nullable=False),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
+    op.create_index(op.f('ix_users_id'), 'users', ['id'], unique=False)
+    op.create_table('charts',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.Integer(), nullable=False),
+    sa.Column('original_filename', sa.String(length=255), nullable=False),
+    sa.Column('mime_type', sa.String(length=100), nullable=False),
+    sa.Column('sha256', sa.String(length=64), nullable=False),
+    sa.Column('status', sa.String(length=32), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('processed_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('error_message', sa.Text(), nullable=True),
+    sa.Column('original_path', sa.String(length=500), nullable=False),
+    sa.Column('preview_path', sa.String(length=500), nullable=True),
+    sa.Column('n_panels', sa.Integer(), nullable=True),
+    sa.Column('n_series', sa.Integer(), nullable=True),
+    sa.Column('result_json', sa.JSON(), nullable=True),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_charts_id'), 'charts', ['id'], unique=False)
+    op.create_index(op.f('ix_charts_sha256'), 'charts', ['sha256'], unique=False)
+    op.create_index(op.f('ix_charts_status'), 'charts', ['status'], unique=False)
+    # ### end Alembic commands ###
+
+
+def downgrade() -> None:
+    """Downgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index(op.f('ix_charts_status'), table_name='charts')
+    op.drop_index(op.f('ix_charts_sha256'), table_name='charts')
+    op.drop_index(op.f('ix_charts_id'), table_name='charts')
+    op.drop_table('charts')
+    op.drop_index(op.f('ix_users_id'), table_name='users')
+    op.drop_index(op.f('ix_users_email'), table_name='users')
+    op.drop_table('users')
+    # ### end Alembic commands ###
+
+==============================
+
+--- FILE: main.py ---
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.v1 import router as api_v1_router
+from app.core.config import settings
+
+app = FastAPI(title="Chart Extraction API")
+
+# Разрешённые источники (origins) для фронтенда.
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    # гарантируем, что существует корневая директория для хранилища файлов
+    settings.storage_dir.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/health", tags=["health"])
+async def health_check():
+    return {"status": "ok"}
+
+
+# Все основные эндпойнты живут под /api/v1
+app.include_router(api_v1_router, prefix="/api/v1")
+
+==============================
+
+--- FILE: __init__.py ---
+
+==============================
+
+--- FILE: deps.py ---
+from __future__ import annotations
+
+from typing import Generator
+import os
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError
+from sqlalchemy.orm import Session
+
+from app.core.security import decode_access_token, get_password_hash
+from app.db.session import SessionLocal
+from app.db.models.user import User
+from app.schemas.auth import TokenPayload
+
+# Схема безопасности "Bearer" для Swagger и зависимостей
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _env_bool(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _auth_enabled() -> bool:
+    return _env_bool("AUTH_ENABLED", "1")
+
+
+def _dev_user_email() -> str:
+    return os.getenv("DEV_USER_EMAIL", "dev@local").strip()
+
+
+def _dev_user_password() -> str:
+    return os.getenv("DEV_USER_PASSWORD", "devpass")
+
+
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _get_or_create_dev_user(db: Session) -> User:
+    email = _dev_user_email()
+    password = _dev_user_password()
+
+    user = db.query(User).filter(User.email == email).first()
+    if user:
+        if not user.is_active:
+            user.is_active = True
+            db.commit()
+            db.refresh(user)
+        return user
+
+    user = User(
+        email=email,
+        hashed_password=get_password_hash(password),
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """
+    Извлекает текущего пользователя по JWT-токену из заголовка Authorization: Bearer <token>.
+    Если AUTH_ENABLED выключен — возвращает dev-пользователя без проверки токена.
+    """
+    if not _auth_enabled():
+        return _get_or_create_dev_user(db)
+
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = credentials.credentials
+
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        payload = decode_access_token(token)
+        token_data = TokenPayload(**payload)
+    except (JWTError, ValueError):
+        raise credentials_exception
+
+    try:
+        user_id = int(token_data.sub)
+    except (TypeError, ValueError):
+        raise credentials_exception
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.is_active:
+        raise credentials_exception
+
+    return user
+
+==============================
+
+--- FILE: __init__.py ---
+
+==============================
+
+--- FILE: auth.py ---
+from fastapi import APIRouter, Depends, status
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db, get_current_user
+from app.db.models.user import User
+from app.schemas.auth import LoginRequest, RegisterRequest, Token
+from app.schemas.user import UserRead
+from app.services.auth import auth_service
+
+router = APIRouter()
+
+
+@router.post(
+    "/register",
+    response_model=UserRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def register_user(
+    data: RegisterRequest,
+    db: Session = Depends(get_db),
+) -> UserRead:
+    """
+    Регистрация нового пользователя.
+    """
+    return auth_service.register(db, data)
+
+
+@router.post(
+    "/login",
+    response_model=Token,
+)
+def login(
+    data: LoginRequest,
+    db: Session = Depends(get_db),
+) -> Token:
+    """
+    Логин: проверка email/пароля, выдача JWT-токена.
+    """
+    return auth_service.login(db, data)
+
+
+@router.get(
+    "/me",
+    response_model=UserRead,
+)
+def read_current_user(
+    current_user: User = Depends(get_current_user),
+) -> UserRead:
+    """
+    Возвращает данные текущего авторизованного пользователя.
+    """
+    return UserRead.model_validate(current_user)
+
+==============================
+
+--- FILE: charts.py ---
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db, get_current_user
+from app.core.config import settings
+from app.db.models.chart import Chart
+from app.schemas.chart import ChartCreateResponse, ChartStatus
+from app.services.charts import ChartService
+
+router = APIRouter()
+chart_service = ChartService()
+
+
+@router.post("/upload", response_model=ChartCreateResponse)
+async def upload_chart(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> ChartCreateResponse:
+    return await chart_service.upload_and_enqueue(
+        db,
+        user_id=current_user.id,
+        upload=file,
+    )
+
+
+@router.get("/{chart_id}", response_model=ChartCreateResponse)
+def get_chart(
+    chart_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> ChartCreateResponse:
+    chart = (
+        db.query(Chart)
+        .filter(Chart.id == chart_id, Chart.user_id == current_user.id)
+        .first()
+    )
+    if not chart:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chart not found",
+        )
+
+    return ChartCreateResponse(
+        id=chart.id,
+        status=ChartStatus(chart.status),
+        original_filename=chart.original_filename,
+        mime_type=chart.mime_type,
+        created_at=chart.created_at,
+        processed_at=chart.processed_at,
+        n_panels=chart.n_panels,
+        n_series=chart.n_series,
+        result_json=chart.result_json,
+        error_message=chart.error_message,
+    )
+
+
+@router.get("/{chart_id}/artifact/{key}")
+def get_chart_artifact(
+    chart_id: int,
+    key: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Отдаёт артефакт пайплайна (картинки/plot) по ключу из result_json["artifacts"].
+    Ключи: lineformer_prediction, chartdete_predictions, converted_plot.
+    """
+    chart = (
+        db.query(Chart)
+        .filter(Chart.id == chart_id, Chart.user_id == current_user.id)
+        .first()
+    )
+    if not chart:
+        raise HTTPException(status_code=404, detail="Chart not found")
+
+    payload = chart.result_json or {}
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict) or key not in artifacts:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    rel = artifacts[key]
+    if not isinstance(rel, str) or rel.startswith(("/", "\\")):
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    storage_root = settings.storage_dir.resolve()
+    file_path = (storage_root / Path(rel)).resolve()
+
+    # защита от выхода за пределы storage (path traversal)
+    if storage_root not in file_path.parents:
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Artifact file missing on disk")
+
+    return FileResponse(str(file_path))
+
+==============================
+
+--- FILE: __init__.py ---
+from fastapi import APIRouter
+
+from . import auth, charts
+
+router = APIRouter()
+
+# /api/v1/auth/...
+router.include_router(auth.router, prefix="/auth", tags=["auth"])
+
+# /api/v1/charts/...
+router.include_router(charts.router, prefix="/charts", tags=["charts"])
+
+==============================
+
+--- FILE: config.py ---
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+from pydantic import BaseModel, ValidationError
+
+# Загружаем .env из текущей директории
+load_dotenv()
+
+
+class Settings(BaseModel):
+    # строка подключения к БД
+    database_url: str
+
+    # JWT
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60
+
+    # каталог для хранения загруженных файлов
+    storage_dir: Path = Path("./storage")
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+def get_settings() -> Settings:
+    try:
+        return Settings(
+            database_url=os.environ.get("DATABASE_URL", ""),
+            jwt_secret_key=os.environ.get("JWT_SECRET_KEY", "CHANGE_ME"),
+            jwt_algorithm=os.environ.get("JWT_ALGORITHM", "HS256"),
+            jwt_access_token_expire_minutes=int(
+                os.environ.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+            ),
+            storage_dir=Path(os.environ.get("STORAGE_DIR", "./storage")),
+        )
+    except ValidationError as e:
+        raise RuntimeError(f"Invalid settings: {e}") from e
+
+
+settings = get_settings()
+
+==============================
+
+--- FILE: security.py ---
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from jose import jwt
+from passlib.context import CryptContext
+
+from app.core.config import settings
+
+# Контекст для хэширования паролей
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def create_access_token(
+    subject: str,
+    expires_minutes: Optional[int] = None,
+) -> str:
+    """
+    subject — обычно id пользователя в виде строки.
+    """
+    if expires_minutes is None:
+        expires_minutes = settings.jwt_access_token_expire_minutes
+
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    to_encode: dict[str, Any] = {"sub": subject, "exp": expire}
+
+    encoded_jwt = jwt.encode(
+        to_encode,
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+    return encoded_jwt
+
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    """
+    Бросает JWTError, если токен некорректен или истёк.
+    """
+    payload = jwt.decode(
+        token,
+        settings.jwt_secret_key,
+        algorithms=[settings.jwt_algorithm],
+    )
+    return payload
+
+==============================
+
+--- FILE: __init__.py ---
+
+==============================
+
+--- FILE: base.py ---
+from sqlalchemy.orm import declarative_base
+
+Base = declarative_base()
+
+==============================
+
+--- FILE: session.py ---
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.core.config import settings
+
+# Создаём engine на основе строки подключения из .env
+engine = create_engine(
+    settings.database_url,
+    future=True,
+    pool_pre_ping=True,
+)
+
+# Фабрика сессий: используется в зависимостях FastAPI (app.api.deps.get_db)
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    future=True,
+)
+
+==============================
+
+--- FILE: __init__.py ---
+
+==============================
+
+--- FILE: chart.py ---
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from sqlalchemy.orm import Session
+
+from app.db.models.chart import Chart
+
+
+class ChartCRUD:
+    def create(
+        self,
+        db: Session,
+        *,
+        user_id: int,
+        original_filename: str,
+        mime_type: str,
+        sha256: str,
+        original_path: str,
+        status: str,
+    ) -> Chart:
+        obj = Chart(
+            user_id=user_id,
+            original_filename=original_filename,
+            mime_type=mime_type,
+            sha256=sha256,
+            original_path=original_path,
+            status=status,
+        )
+        db.add(obj)
+        db.commit()
+        db.refresh(obj)
+        return obj
+
+    def get(self, db: Session, chart_id: int) -> Optional[Chart]:
+        return db.query(Chart).filter(Chart.id == chart_id).first()
+
+    def set_status(
+        self,
+        db: Session,
+        chart_id: int,
+        *,
+        status: str,
+        error_message: Optional[str] = None,
+    ) -> Optional[Chart]:
+        obj = self.get(db, chart_id)
+        if not obj:
+            return None
+        obj.status = status
+        obj.error_message = error_message
+        db.commit()
+        db.refresh(obj)
+        return obj
+
+    def set_result(
+        self,
+        db: Session,
+        chart_id: int,
+        *,
+        result_json: dict[str, Any],
+        n_panels: int,
+        n_series: int,
+    ) -> Optional[Chart]:
+        obj = self.get(db, chart_id)
+        if not obj:
+            return None
+        obj.result_json = result_json
+        obj.n_panels = n_panels
+        obj.n_series = n_series
+        obj.status = "done"
+        obj.error_message = None
+        db.commit()
+        db.refresh(obj)
+        return obj
+
+
+chart_crud = ChartCRUD()
+
+==============================
+
+--- FILE: user.py ---
+from typing import Optional
+
+from sqlalchemy.orm import Session
+
+from app.core.security import get_password_hash
+from app.db.models.user import User
+from app.schemas.user import UserCreate
+
+
+class UserCRUD:
+    def get_by_id(self, db: Session, user_id: int) -> Optional[User]:
+        return db.query(User).filter(User.id == user_id).first()
+
+    def get_by_email(self, db: Session, email: str) -> Optional[User]:
+        return db.query(User).filter(User.email == email).first()
+
+    def create(self, db: Session, user_in: UserCreate) -> User:
+        db_obj = User(
+            email=user_in.email,
+            hashed_password=get_password_hash(user_in.password),
+            is_active=True,
+        )
+        db.add(db_obj)
+        db.commit()
+        db.refresh(db_obj)
+        return db_obj
+
+
+user_crud = UserCRUD()
+
+==============================
+
+--- FILE: __init__.py ---
+from app.db.crud.user import user_crud  # noqa
+from app.db.crud.chart import chart_crud  # noqa
+
+==============================
+
+--- FILE: auth.py ---
+from pydantic import BaseModel, EmailStr
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class TokenPayload(BaseModel):
+    sub: str  # user id (в виде строки)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+==============================
+
+--- FILE: chart.py ---
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Any, Optional
+
+from pydantic import BaseModel
+
+
+class ChartStatus(str, Enum):
+    uploaded = "uploaded"
+    processing = "processing"
+    done = "done"
+    error = "error"
+
+
+class ChartCreateResponse(BaseModel):
+    id: int
+    status: ChartStatus
+    original_filename: str
+    mime_type: str
+    created_at: datetime
+
+    processed_at: Optional[datetime] = None
+    n_panels: Optional[int] = None
+    n_series: Optional[int] = None
+
+    result_json: Optional[dict[str, Any]] = None
+    error_message: Optional[str] = None
+
+==============================
+
+--- FILE: ml.py ---
+from enum import Enum
+from typing import List, Optional, Tuple
+
+from pydantic import BaseModel
+
+
+class ScaleType(str, Enum):
+    linear = "linear"
+    log = "log"
+    time = "time"
+
+
+class SeriesStyle(BaseModel):
+    mean_color: Optional[Tuple[int, int, int]] = None  # RGB
+    marker: Optional[str] = None
+    dash: Optional[str] = None
+
+
+class Series(BaseModel):
+    id: str
+    name: Optional[str] = None
+    style: Optional[SeriesStyle] = None
+    # список точек: [ [x, y], ... ] уже в единицах осей
+    points: List[Tuple[float, float]]
+
+
+class Panel(BaseModel):
+    id: str
+    row: Optional[int] = None
+    col: Optional[int] = None
+
+    x_unit: Optional[str] = None
+    y_unit: Optional[str] = None
+
+    x_scale: ScaleType = ScaleType.linear
+    y_scale: ScaleType = ScaleType.linear
+
+    series: List[Series]
+
+
+class MlMeta(BaseModel):
+    # простые метаданные, которые может вернуть пайплайн
+    total_time_ms: Optional[float] = None
+    ocr_time_ms: Optional[float] = None
+    line_extraction_time_ms: Optional[float] = None
+
+    x_scale_confidence: Optional[float] = None
+    y_scale_confidence: Optional[float] = None
+
+    # любые дополнительные флаги
+    used_degrid: Optional[bool] = None
+
+==============================
+
+--- FILE: user.py ---
+from datetime import datetime
+
+from pydantic import BaseModel, EmailStr, ConfigDict
+
+
+class UserBase(BaseModel):
+    email: EmailStr
+
+
+class UserCreate(UserBase):
+    password: str
+
+
+class UserRead(UserBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    is_active: bool
+    created_at: datetime
+
+==============================
+
+--- FILE: __init__.py ---
+
+==============================
+
+--- FILE: auth.py ---
+from fastapi import HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.core.security import verify_password, create_access_token
+from app.db.crud.user import user_crud
+from app.db.models.user import User
+from app.schemas.auth import LoginRequest, RegisterRequest, Token
+from app.schemas.user import UserCreate, UserRead
+
+
+class AuthService:
+    """
+    Сервис авторизации: регистрация, логин, простая аутентификация пользователя.
+    """
+
+    def register(self, db: Session, data: RegisterRequest) -> UserRead:
+        """
+        Регистрация нового пользователя.
+        """
+        # Проверяем, что такого email ещё нет
+        existing = user_crud.get_by_email(db, data.email)
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User with this email already exists",
+            )
+
+        # Создаём пользователя через CRUD (там уже хэшируется пароль)
+        user = user_crud.create(
+            db,
+            UserCreate(email=data.email, password=data.password),
+        )
+        return UserRead.model_validate(user)
+
+    def authenticate(self, db: Session, email: str, password: str) -> User | None:
+        """
+        Проверка пары email/пароль. Возвращает пользователя или None.
+        """
+        user = user_crud.get_by_email(db, email)
+        if not user:
+            return None
+        if not verify_password(password, user.hashed_password):
+            return None
+        if not user.is_active:
+            return None
+        return user
+
+    def login(self, db: Session, data: LoginRequest) -> Token:
+        """
+        Логин: проверка email/пароля и выдача JWT-токена.
+        """
+        user = self.authenticate(db, data.email, data.password)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Incorrect email or password",
+            )
+
+        # В subject кладём id пользователя в виде строки
+        access_token = create_access_token(subject=str(user.id))
+
+        return Token(access_token=access_token)
+
+
+auth_service = AuthService()
+
+==============================
+
+--- FILE: charts.py ---
+from pathlib import Path
+
+from fastapi import HTTPException, UploadFile, status
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.db.crud.chart import chart_crud
+from app.schemas.chart import ChartCreateResponse, ChartStatus
+from app.utils.hashing import sha256_bytes
+
+
+def _safe_filename(name: str) -> str:
+    cleaned = "".join(c for c in name if c.isalnum() or c in (".", "_", "-"))
+    return (cleaned[:200] or "upload.bin")
+
+
+class ChartService:
+    async def upload_and_enqueue(
+        self,
+        db: Session,
+        *,
+        user_id: int,
+        upload: UploadFile,
+    ) -> ChartCreateResponse:
+        file_bytes = await upload.read()
+        if not file_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Empty file",
+            )
+
+        sha = sha256_bytes(file_bytes)
+        filename = _safe_filename(upload.filename or "upload.bin")
+        ext = Path(filename).suffix.lower() or ".bin"
+
+        # сохраняем в STORAGE_DIR/ (важно: сохраняем абсолютный путь)
+        base_dir = Path(settings.storage_dir).resolve()
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        original_path = (base_dir / f"user_{user_id}" / f"{sha}{ext}").resolve()
+        original_path.parent.mkdir(parents=True, exist_ok=True)
+
+        original_path.write_bytes(file_bytes)
+
+        chart = chart_crud.create(
+            db,
+            user_id=user_id,
+            original_filename=filename,
+            mime_type=upload.content_type or "application/octet-stream",
+            sha256=sha,
+            original_path=str(original_path),
+            status=ChartStatus.uploaded.value,
+        )
+
+        return ChartCreateResponse(
+            id=chart.id,
+            status=ChartStatus(chart.status),
+            original_filename=chart.original_filename,
+            mime_type=chart.mime_type,
+            created_at=chart.created_at,
+            processed_at=chart.processed_at,
+            n_panels=chart.n_panels,
+            n_series=chart.n_series,
+            result_json=chart.result_json,
+            error_message=chart.error_message,
+        )
+
+==============================
+
+--- FILE: __init__.py ---
+
+==============================
+
+--- FILE: export.py ---
+from __future__ import annotations
+
+import csv
+from io import StringIO
+from typing import Iterable, Optional, Tuple, List
+
+from app.schemas.ml import Panel
+
+
+def _iter_flat_points(
+    panels: List[Panel],
+    panel_filter: Optional[str] = None,
+    series_filter: Optional[str] = None,
+) -> Iterable[Tuple[str, str, float, float]]:
+    """
+    Плоский итератор по точкам:
+    (panel_id, series_id, x, y), с учётом фильтров panel_id / series_id.
+    """
+    for panel in panels:
+        if panel_filter and panel.id != panel_filter:
+            continue
+        for series in panel.series:
+            if series_filter and series.id != series_filter:
+                continue
+            for x, y in series.points:
+                yield panel.id, series.id, x, y
+
+
+def export_to_csv(
+    panels: List[Panel],
+    panel_id: Optional[str] = None,
+    series_id: Optional[str] = None,
+) -> str:
+    """
+    CSV со столбцами: panel_id,series_id,x,y
+    Если заданы panel_id / series_id — экспортируем только их.
+    """
+    output = StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow(["panel_id", "series_id", "x", "y"])
+    for p_id, s_id, x, y in _iter_flat_points(panels, panel_id, series_id):
+        writer.writerow([p_id, s_id, x, y])
+
+    return output.getvalue()
+
+
+def export_to_txt(
+    panels: List[Panel],
+    panel_id: Optional[str] = None,
+    series_id: Optional[str] = None,
+) -> str:
+    """
+    Простой текстовый формат с табуляцией:
+    panel_id<TAB>series_id<TAB>x<TAB>y
+    """
+    output = StringIO()
+    output.write("panel_id\tseries_id\tx\ty\n")
+
+    for p_id, s_id, x, y in _iter_flat_points(panels, panel_id, series_id):
+        output.write(f"{p_id}\t{s_id}\t{x}\t{y}\n")
+
+    return output.getvalue()
+
+==============================
+
+--- FILE: hashing.py ---
+from hashlib import sha256
+from typing import BinaryIO
+
+
+def sha256_bytes(data: bytes) -> str:
+    """
+    Подсчёт sha256 для массива байт.
+    """
+    h = sha256()
+    h.update(data)
+    return h.hexdigest()
+
+
+def sha256_fileobj(fileobj: BinaryIO, chunk_size: int = 8192) -> str:
+    """
+    Подсчёт sha256 для файлового объекта (например, UploadFile.file).
+
+    ВАЖНО: вызывающий код сам отвечает за позицию курсора (seek(0) до и после).
+    """
+    h = sha256()
+    while True:
+        chunk = fileobj.read(chunk_size)
+        if not chunk:
+            break
+        h.update(chunk)
+    return h.hexdigest()
+
+==============================
+
+--- FILE: __init__.py ---
+
+==============================
