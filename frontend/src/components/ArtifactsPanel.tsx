@@ -1,11 +1,26 @@
 import { artifactUrl } from "../api/client";
 
+type ArtifactKey =
+  | "lineformer_prediction"
+  | "chartdete_predictions"
+  | "converted_plot";
+
+type ArtifactsMap = Partial<Record<ArtifactKey, string>>;
+
+type ResultJson = {
+  artifacts?: ArtifactsMap;
+} | null;
+
 type Props = {
   chartId: number;
-  resultJson: any;
+  resultJson: ResultJson | unknown;
 };
 
-type ArtifactKey = "lineformer_prediction" | "chartdete_predictions" | "converted_plot";
+const ARTIFACT_KEYS: ArtifactKey[] = [
+  "lineformer_prediction",
+  "chartdete_predictions",
+  "converted_plot",
+];
 
 const META: Record<ArtifactKey, { title: string; subtitle: string }> = {
   lineformer_prediction: {
@@ -21,6 +36,28 @@ const META: Record<ArtifactKey, { title: string; subtitle: string }> = {
     subtitle: "Plot (если data.json сформирован)",
   },
 };
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractArtifacts(value: unknown): ArtifactsMap | null {
+  if (!isObject(value)) return null;
+
+  const rawArtifacts = value["artifacts"];
+  if (!isObject(rawArtifacts)) return null;
+
+  const result: ArtifactsMap = {};
+
+  for (const key of ARTIFACT_KEYS) {
+    const v = rawArtifacts[key];
+    if (typeof v === "string" && v.trim() !== "") {
+      result[key] = v;
+    }
+  }
+
+  return result;
+}
 
 function ArtifactCard({
   title,
@@ -45,6 +82,9 @@ function ArtifactCard({
             className="h-full w-full object-contain"
             alt={title}
             loading="lazy"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
           />
         </div>
       </div>
@@ -53,10 +93,9 @@ function ArtifactCard({
 }
 
 export default function ArtifactsPanel({ chartId, resultJson }: Props) {
-  const artifacts = (resultJson as any)?.artifacts as Partial<Record<string, string>> | undefined;
+  const artifacts = extractArtifacts(resultJson);
 
-  const keys: ArtifactKey[] = ["lineformer_prediction", "chartdete_predictions", "converted_plot"];
-  const available = keys.filter((k) => artifacts && artifacts[k]);
+  const available = ARTIFACT_KEYS.filter((k) => typeof artifacts?.[k] === "string");
 
   if (!artifacts || available.length === 0) {
     return <div className="text-sm text-slate-600">Артефакты пока не доступны.</div>;

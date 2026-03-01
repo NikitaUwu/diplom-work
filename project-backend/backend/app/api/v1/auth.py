@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user
@@ -8,6 +8,8 @@ from app.schemas.user import UserRead
 from app.services.auth import auth_service
 
 router = APIRouter()
+
+COOKIE_NAME = "access_token"
 
 
 @router.post(
@@ -19,9 +21,6 @@ def register_user(
     data: RegisterRequest,
     db: Session = Depends(get_db),
 ) -> UserRead:
-    """
-    Регистрация нового пользователя.
-    """
     return auth_service.register(db, data)
 
 
@@ -31,12 +30,35 @@ def register_user(
 )
 def login(
     data: LoginRequest,
+    response: Response,
     db: Session = Depends(get_db),
 ) -> Token:
     """
     Логин: проверка email/пароля, выдача JWT-токена.
+    Дополнительно: кладём access_token в HttpOnly cookie, чтобы <img> мог грузить артефакты.
     """
-    return auth_service.login(db, data)
+    token = auth_service.login(db, data)
+
+    # Для localhost/HTTP: secure=False. В проде будет secure=True (HTTPS).
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token.access_token,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        path="/",
+        max_age=60 * 60,  # 1 час
+    )
+    return token
+
+
+@router.post("/logout")
+def logout(response: Response) -> dict:
+    """
+    Выход: удаляем cookie с токеном.
+    """
+    response.delete_cookie(key=COOKIE_NAME, path="/")
+    return {"ok": True}
 
 
 @router.get(
@@ -46,7 +68,4 @@ def login(
 def read_current_user(
     current_user: User = Depends(get_current_user),
 ) -> UserRead:
-    """
-    Возвращает данные текущего авторизованного пользователя.
-    """
     return UserRead.model_validate(current_user)

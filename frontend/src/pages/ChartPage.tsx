@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getChart, type ChartCreateResponse, type ChartStatus } from "../api/client";
+import {
+  exportCsvUrl,
+  exportJsonUrl,
+  exportTxtUrl,
+  getChart,
+  type ChartCreateResponse,
+  type ChartStatus,
+} from "../api/client";
 import Button from "../components/ui/Button";
 import Card from "../components/ui/Card";
 import Badge from "../components/ui/Badge";
 import Alert from "../components/ui/Alert";
 import Spinner from "../components/ui/Spinner";
+import DropdownButton from "../components/ui/DropdownButton";
 import ArtifactsPanel from "../components/ArtifactsPanel";
 import ResultPlot from "../components/ResultPlot";
 
@@ -35,41 +43,6 @@ function statusVariant(s: ChartStatus) {
     default:
       return "default";
   }
-}
-
-function downloadText(filename: string, content: string, mime: string) {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function exportCsvFromResult(resultJson: any): string {
-  const panels = resultJson?.panels;
-  if (!Array.isArray(panels)) return "";
-
-  let out = "panel_id,series_id,x,y\n";
-
-  for (const p of panels) {
-    const panelId = p?.id ?? "panel";
-    const series = Array.isArray(p?.series) ? p.series : [];
-
-    for (const s of series) {
-      const sid = s?.id ?? "series";
-      const points = Array.isArray(s?.points) ? s.points : [];
-
-      for (const pt of points) {
-        if (!Array.isArray(pt) || pt.length < 2) continue;
-        out += `${panelId},${sid},${pt[0]},${pt[1]}\n`;
-      }
-    }
-  }
-  return out;
 }
 
 export default function ChartPage() {
@@ -120,35 +93,43 @@ export default function ChartPage() {
 
   const canExport = chart?.status === "done" && chart.result_json;
 
+  const showArtifacts = Boolean(chart);
+  const showPlot = chart?.status === "done";
+
   return (
     <div className="min-h-full">
-      <div className="mx-auto max-w-5xl px-6 py-10">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="text-xs text-slate-500">Результаты обработки</div>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+      <div className="mx-auto w-full max-w-screen-xl px-4 py-8 sm:px-6 sm:py-10 lg:px-10">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:items-center">
+          <div className="lg:col-span-5">
+            <div className="text-xs text-slate-500 dark:text-slate-400">Результаты обработки</div>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
               График #{Number.isFinite(chartId) ? chartId : "—"}
             </h1>
           </div>
 
-          <div className="flex items-center gap-3">
-            {chart && <Badge variant={statusVariant(chart.status) as any}>{statusLabel(chart.status)}</Badge>}
+          <div className="lg:col-span-7">
+            <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+              {chart && (
+                <Badge variant={statusVariant(chart.status) as any}>
+                  {statusLabel(chart.status)}
+                </Badge>
+              )}
 
-            <Button variant="secondary" onClick={() => navigate("/")}>
-              Назад
-            </Button>
+              <Button variant="secondary" onClick={() => navigate("/")}>
+                На главную страницу
+              </Button>
 
-            <Button
-              onClick={() => {
-                const csv = exportCsvFromResult(chart?.result_json as any);
-                if (!csv) return;
-                downloadText(`chart_${chartId}.csv`, csv, "text/csv;charset=utf-8");
-              }}
-              disabled={!canExport}
-              title={!canExport ? "Экспорт доступен только если точки успешно извлечены" : ""}
-            >
-              Экспорт CSV
-            </Button>
+              <DropdownButton
+                label="Скачать"
+                variant="primary"
+                disabled={!canExport}
+                items={[
+                  { label: "CSV", href: exportCsvUrl(chartId), disabled: !canExport },
+                  { label: "TXT", href: exportTxtUrl(chartId), disabled: !canExport },
+                  { label: "JSON", href: exportJsonUrl(chartId), disabled: !canExport },
+                ]}
+              />
+            </div>
           </div>
         </div>
 
@@ -168,26 +149,35 @@ export default function ChartPage() {
           </div>
         )}
 
-        <div className="mt-6 grid grid-cols-1 gap-6">
-          {chart && (
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
+          {showArtifacts && (
             <Card
+              className={showPlot ? "lg:col-span-5" : "lg:col-span-12"}
               title="Артефакты"
               description="Диагностические изображения (LineFormer/ChartDete и, если есть, plot)."
-              right={(chart.status === "processing" || chart.status === "uploaded") ? <Spinner /> : null}
+              right={
+                chart && (chart.status === "processing" || chart.status === "uploaded") ? (
+                  <Spinner />
+                ) : null
+              }
             >
-              <ArtifactsPanel chartId={chart.id} resultJson={chart.result_json} />
+              <ArtifactsPanel chartId={chart!.id} resultJson={chart!.result_json} />
             </Card>
           )}
 
-          {chart?.status === "done" && (
-            <Card title="Интерактивный график" description="Построен по извлечённым точкам">
-              <ResultPlot resultJson={chart.result_json} />
+          {showPlot && (
+            <Card
+              className="lg:col-span-7"
+              title="Интерактивный график"
+              description="Построен по извлечённым точкам"
+            >
+              <ResultPlot resultJson={chart?.result_json} />
             </Card>
           )}
         </div>
 
-        <div className="mt-8 text-xs text-slate-500">
-          Экспорт формируется из извлечённых точек (если `data.json` был успешно создан).
+        <div className="mt-8 text-xs text-slate-500 dark:text-slate-400">
+          Экспорт доступен после успешного извлечения точек.
         </div>
       </div>
     </div>
