@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status, Response
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status, Response, Body
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -81,19 +81,35 @@ def _resolve_in_storage(raw_path: str, *, allow_absolute: bool) -> Path:
     return file_path
 
 
-def _parse_panels_or_409(chart: Chart) -> list[Panel]:
-    payload = chart.result_json or {}
+def _parse_panels(
+    payload: dict,
+    *,
+    missing_status: int = 400,
+    invalid_status: int = 400,
+    missing_detail: str = "Invalid panels",
+    invalid_detail: str = "Invalid panels",
+) -> list[Panel]:
     panels_raw = payload.get("panels")
     if not isinstance(panels_raw, list) or not panels_raw:
-        raise HTTPException(status_code=409, detail="Export is not available yet")
+        raise HTTPException(status_code=missing_status, detail=missing_detail)
 
     panels: list[Panel] = []
     for p in panels_raw:
         try:
             panels.append(Panel.model_validate(p))
         except (ValidationError, TypeError, ValueError):
-            raise HTTPException(status_code=500, detail="Invalid panels format in result_json")
+            raise HTTPException(status_code=invalid_status, detail=invalid_detail)
     return panels
+
+
+def _parse_panels_or_409(chart: Chart) -> list[Panel]:
+    return _parse_panels(
+        chart.result_json or {},
+        missing_status=409,
+        invalid_status=500,
+        missing_detail="Export is not available yet",
+        invalid_detail="Invalid panels format in result_json",
+    )
 
 
 @router.post("/upload", response_model=ChartCreateResponse)
@@ -244,3 +260,27 @@ def delete_chart(
     db.commit()
 
     return Response(status_code=204)
+
+
+@router.put("/{chart_id}/result_json", response_model=ChartCreateResponse)
+def update_chart_result_json(
+    chart_id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> ChartCreateResponse:
+    chart = _get_user_chart_or_404(db, chart_id, current_user.id)
+
+    if chart.status != ChartStatus.done.value:
+        raise HTTPException(status_code=409, detail="Chart is not ready for editing")
+
+    panels = _parse_panels(payload)
+
+    chart.result_json = payload
+    chart.n_panels = len(panels)
+    chart.n_series = sum(len(p.series) for p in panels)
+
+    db.commit()
+    db.refresh(chart)
+
+    return _to_chart_response(chart)

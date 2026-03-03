@@ -199,3 +199,18 @@ export async function deleteChart(id: number): Promise<void> {
 
   if (!res.ok) throw new Error(`Delete failed: ${await readError(res)}`);
 }
+
+export async function updateChartResultJson(
+  chartId: number,
+  resultJson: unknown
+): Promise<ChartCreateResponse> {
+  const res = await fetch(apiUrl(`/charts/${chartId}/result_json`), {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(resultJson),
+  });
+
+  if (!res.ok) throw new Error(`Save failed: ${await readError(res)}`);
+  return res.json();
+}
