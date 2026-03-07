@@ -12,6 +12,7 @@ import {
   exportCsvUrl,
   exportJsonUrl,
   exportTxtUrl,
+  exportTableCsvUrl,
   listCharts,
   originalUrl,
   type ChartCreateResponse,
@@ -154,6 +155,7 @@ export default function ResultsPage() {
                       { label: "CSV", href: exportCsvUrl(c.id) },
                       { label: "TXT", href: exportTxtUrl(c.id) },
                       { label: "JSON", href: exportJsonUrl(c.id) },
+                      { label: "TABLE", href: exportTableCsvUrl(c.id) }
                     ]}
                   />
 

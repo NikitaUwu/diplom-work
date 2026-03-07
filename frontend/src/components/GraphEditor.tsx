@@ -1,14 +1,14 @@
-// src/components/GraphEditor.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import Button from "./ui/Button";
 import Alert from "./ui/Alert";
+import Card from "./ui/Card";
 
 type Point = { x: number; y: number };
 
 type Series = {
   id: string;
   name: string;
-  interp: "linear" | "poly";
+  interp: "linear" | "poly" | "lsq";
   points: Point[];
 };
 
@@ -55,6 +55,54 @@ const MAX_SERIES_LABEL = 26;
 const ZOOM_STEP = 1.1;
 const MIN_SPAN = 1e-9;
 
+const LSQ_MAX_DEG = 5;
+
+const COLOR_OPTIONS = [
+  {
+    id: "black",
+    label: "Чёрный",
+    path: "stroke-black dark:stroke-slate-100",
+    dot: "bg-black dark:bg-slate-100",
+    pointFill: "fill-black dark:fill-slate-100",
+  },
+  {
+    id: "blue",
+    label: "Синий",
+    path: "stroke-blue-600 dark:stroke-blue-400",
+    dot: "bg-blue-600",
+    pointFill: "fill-blue-600",
+  },
+  {
+    id: "green",
+    label: "Зелёный",
+    path: "stroke-green-600 dark:stroke-green-400",
+    dot: "bg-green-600",
+    pointFill: "fill-green-600",
+  },
+  {
+    id: "red",
+    label: "Красный",
+    path: "stroke-red-600 dark:stroke-red-400",
+    dot: "bg-red-600",
+    pointFill: "fill-red-600",
+  },
+  {
+    id: "orange",
+    label: "Оранжевый",
+    path: "stroke-orange-600 dark:stroke-orange-400",
+    dot: "bg-orange-600",
+    pointFill: "fill-orange-600",
+  },
+  {
+    id: "purple",
+    label: "Фиолетовый",
+    path: "stroke-purple-600 dark:stroke-purple-400",
+    dot: "bg-purple-600",
+    pointFill: "fill-purple-600",
+  },
+] as const;
+
+
 function ellipsis(s: string, max: number) {
   if (s.length <= max) return s;
   return s.slice(0, Math.max(0, max - 1)) + "…";
@@ -90,11 +138,18 @@ function niceTicks(min: number, max: number, count = 6): number[] {
   return out.filter((t) => t >= min - eps && t <= max + eps);
 }
 
+// подписи осей/tooltip — до сотых
 function formatTick(v: number) {
   if (!Number.isFinite(v)) return "—";
-  const a = Math.abs(v);
-  if (a >= 1000 || (a > 0 && a < 0.01)) return v.toExponential(2);
-  return v.toFixed(6).replace(/\.?0+$/, "");
+  const r = Math.round(v * 100) / 100;
+  return r.toFixed(2).replace(/\.?0+$/, "");
+}
+
+// коэффициенты формулы — до 6 знаков
+function formatCoef(v: number) {
+  if (!Number.isFinite(v)) return "0";
+  const r = Math.round(v * 1e6) / 1e6;
+  return r.toFixed(6).replace(/\.?0+$/, "");
 }
 
 function parsePanels(resultJson: unknown): Panel[] {
@@ -112,10 +167,13 @@ function parsePanels(resultJson: unknown): Panel[] {
         .map((t: any) => ({ x: Number(t[0]), y: Number(t[1]) }))
         .filter((pt: Point) => Number.isFinite(pt.x) && Number.isFinite(pt.y));
 
+      const interp: Series["interp"] =
+        s?.interp === "poly" ? "poly" : s?.interp === "lsq" || s?.interp === "lagrange" ? "lsq" : "linear";
+
       return {
         id: String(s?.id ?? uid(`s${pi}_${si}`)),
         name: String(s?.name ?? `Кривая ${si + 1}`),
-        interp: (s?.interp === "poly" ? "poly" : "linear") as Series["interp"],
+        interp,
         points: pts,
       };
     });
@@ -178,15 +236,32 @@ function axisValueToScreen(value: number, domain: [number, number], warp: AxisWa
 
   const dk = warp.dataKnots;
   const sk = warp.screenKnots;
+  const n = dk.length;
 
-  const v = clamp(value, dk[0], dk[dk.length - 1]);
-  const i = _findSeg(dk, v);
+  if (value <= dk[0]) {
+    const a = dk[0],
+      b = dk[1];
+    const sa = sk[0],
+      sb = sk[1];
+    const t = (value - a) / (b - a || 1);
+    return sa + t * (sb - sa);
+  }
 
+  if (value >= dk[n - 1]) {
+    const a = dk[n - 2],
+      b = dk[n - 1];
+    const sa = sk[n - 2],
+      sb = sk[n - 1];
+    const t = (value - a) / (b - a || 1);
+    return sa + t * (sb - sa);
+  }
+
+  const i = _findSeg(dk, value);
   const a = dk[i],
     b = dk[i + 1];
   const sa = sk[i],
     sb = sk[i + 1];
-  const t = (v - a) / (b - a || 1);
+  const t = (value - a) / (b - a || 1);
   return sa + t * (sb - sa);
 }
 
@@ -212,7 +287,6 @@ function axisScreenToValue(screen: number, domain: [number, number], warp: AxisW
   return a + t * (b - a);
 }
 
-// screenKnots = линейные позиции, чтобы при включении режима сетка не "прыгала"
 function buildWarpFromTicks(domain: [number, number], count = 6): AxisWarp {
   const [d0, d1] = domain;
   const inner = niceTicks(d0, d1, count).filter((t) => t > d0 && t < d1);
@@ -240,21 +314,20 @@ function remapDataKnots(oldKnots: number[], oldDomain: [number, number], newDoma
   });
 }
 
-// ===== Cubic spline y(x), natural =====
-function splineSample(points: Point[], samples = 250): Point[] {
-  if (points.length < 3) return points;
+// ===== Cubic spline =====
+function splineCoefficients(points: Point[]) {
+  if (points.length < 3) return null;
 
-  const xs = points.map((p) => p.x);
-  const ys = points.map((p) => p.y);
+  const pts = points.slice().sort((a, b) => a.x - b.x);
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
 
-  for (let i = 1; i < xs.length; i++) {
-    if (xs[i] === xs[i - 1]) return points;
-  }
+  for (let i = 1; i < xs.length; i++) if (xs[i] === xs[i - 1]) return null;
 
   const n = xs.length;
   const h: number[] = new Array(n - 1);
   for (let i = 0; i < n - 1; i++) h[i] = xs[i + 1] - xs[i];
-  for (let i = 0; i < n - 1; i++) if (h[i] === 0) return points;
+  for (let i = 0; i < n - 1; i++) if (h[i] === 0) return null;
 
   const a: number[] = new Array(n).fill(0);
   const b: number[] = new Array(n).fill(0);
@@ -290,28 +363,183 @@ function splineSample(points: Point[], samples = 250): Point[] {
     dd[i] = (cc[i + 1] - cc[i]) / (3 * h[i]);
   }
 
-  const xMin = xs[0];
-  const xMax = xs[n - 1];
+  const segs = [];
+  for (let i = 0; i < n - 1; i++) {
+    segs.push({ x0: xs[i], x1: xs[i + 1], a: aa[i], b: bb[i], c: cc[i], d: dd[i] });
+  }
+  return { pts, segs };
+}
+
+function splineSample(points: Point[], samples = 250): Point[] {
+  const coeff = splineCoefficients(points);
+  if (!coeff) return points;
+
+  const pts = coeff.pts;
+  const segs = coeff.segs;
+
+  const xMin = pts[0].x;
+  const xMax = pts[pts.length - 1].x;
   const out: Point[] = [];
   const N = Math.max(50, samples);
 
   for (let k = 0; k <= N; k++) {
     const x = xMin + ((xMax - xMin) * k) / N;
 
-    let i = n - 2;
-    for (let j = 0; j < n - 1; j++) {
-      if (x <= xs[j + 1]) {
-        i = j;
+    let si = segs.length - 1;
+    for (let j = 0; j < segs.length; j++) {
+      if (x <= segs[j].x1) {
+        si = j;
         break;
       }
     }
 
-    const dx = x - xs[i];
-    const y = aa[i] + bb[i] * dx + cc[i] * dx * dx + dd[i] * dx * dx * dx;
+    const s = segs[si];
+    const dx = x - s.x0;
+    const y = s.a + s.b * dx + s.c * dx * dx + s.d * dx * dx * dx;
     out.push({ x, y });
   }
-
   return out;
+}
+
+// ===== LSQ fit =====
+type PolyFitResult = { degree: number; xMin: number; xMax: number; aX: number[] };
+
+function solveLinearSystem(A: number[][], b: number[]) {
+  const n = b.length;
+  const M = A.map((row, i) => [...row, b[i]]);
+
+  for (let col = 0; col < n; col++) {
+    let piv = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+    }
+    if (Math.abs(M[piv][col]) < 1e-12) return null;
+
+    if (piv !== col) {
+      const tmp = M[col];
+      M[col] = M[piv];
+      M[piv] = tmp;
+    }
+
+    const div = M[col][col];
+    for (let c = col; c <= n; c++) M[col][c] /= div;
+
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r][col];
+      if (Math.abs(f) < 1e-12) continue;
+      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+
+  return M.map((row) => row[n]);
+}
+
+function polyMul(a: number[], b: number[]) {
+  const out = new Array(a.length + b.length - 1).fill(0);
+  for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) out[i + j] += a[i] * b[j];
+  return out;
+}
+function polyScale(a: number[], k: number) {
+  return a.map((v) => v * k);
+}
+function polyAdd(a: number[], b: number[]) {
+  const n = Math.max(a.length, b.length);
+  const out = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) out[i] = (a[i] ?? 0) + (b[i] ?? 0);
+  return out;
+}
+
+function lsqFit(points: Point[], degreeWanted: number): PolyFitResult | null {
+  const pts = points.slice().filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (pts.length < 2) return null;
+
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+
+  const xMin = Math.min(...xs);
+  const xMax = Math.max(...xs);
+  const span = xMax - xMin;
+  if (!Number.isFinite(span) || span === 0) return null;
+
+  const deg = clamp(degreeWanted, 1, Math.min(LSQ_MAX_DEG, pts.length - 1));
+  const m = deg + 1;
+
+  const alpha = 2 / span;
+  const beta = -(xMin + xMax) / span; // t = alpha*x + beta
+
+  const ATA: number[][] = Array.from({ length: m }, () => new Array(m).fill(0));
+  const ATy: number[] = new Array(m).fill(0);
+
+  for (let i = 0; i < pts.length; i++) {
+    const t = alpha * xs[i] + beta;
+    const pows = new Array(m).fill(1);
+    for (let k = 1; k < m; k++) pows[k] = pows[k - 1] * t;
+
+    for (let r = 0; r < m; r++) {
+      ATy[r] += pows[r] * ys[i];
+      for (let c = 0; c < m; c++) ATA[r][c] += pows[r] * pows[c];
+    }
+  }
+
+  const cT = solveLinearSystem(ATA, ATy);
+  if (!cT) return null;
+
+  const tPoly = [beta, alpha];
+  let powPoly: number[] = [1];
+  let aX: number[] = [0];
+
+  for (let k = 0; k < cT.length; k++) {
+    if (k === 0) powPoly = [1];
+    else powPoly = polyMul(powPoly, tPoly);
+    aX = polyAdd(aX, polyScale(powPoly, cT[k]));
+  }
+
+  return { degree: deg, xMin, xMax, aX };
+}
+
+function evalPolyCoeffs(a: number[], x: number) {
+  let y = 0;
+  for (let i = a.length - 1; i >= 0; i--) y = y * x + a[i];
+  return y;
+}
+
+function polyFormula(a: number[]) {
+  const eps = 1e-10;
+  const terms: string[] = [];
+  for (let k = a.length - 1; k >= 0; k--) {
+    const c = a[k] ?? 0;
+    if (Math.abs(c) < eps) continue;
+
+    const sign = c < 0 ? "−" : terms.length ? "+" : "";
+    const abs = Math.abs(c);
+
+    let coefStr = formatCoef(abs);
+    if (k > 0 && Math.abs(abs - 1) < 1e-10) coefStr = "";
+
+    const xPart = k === 0 ? "" : k === 1 ? "x" : `x^${k}`;
+
+    if (k === 0) terms.push(`${sign}${coefStr}`);
+    else if (!coefStr) terms.push(`${sign}${xPart}`);
+    else terms.push(`${sign}${coefStr}·${xPart}`);
+  }
+
+  if (!terms.length) return "y = 0";
+  return `y = ${terms.join(" ")}`.replace(/^y = \+ /, "y = ");
+}
+
+function interpLabel(i: Series["interp"]) {
+  if (i === "linear") return "Линии";
+  if (i === "poly") return "Сплайн";
+  return "МНК";
+}
+
+function defaultColorIndex(prefer: number, used: Set<number>) {
+  if (!used.has(prefer)) return prefer;
+  for (let i = 0; i < COLOR_OPTIONS.length; i++) {
+    if (!used.has(i)) return i;
+  }
+  return prefer;
 }
 
 export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
@@ -323,7 +551,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     return p0?.series?.[0]?.id ?? null;
   });
 
-  const [mode, setMode] = useState<"select" | "add-point">("select");
+  const [mode, setMode] = useState<"select" | "add-point" | "delete-point">("select");
   const [gridDragAxis, setGridDragAxis] = useState<null | "x" | "y">(null);
   const [panMode, setPanMode] = useState(false);
 
@@ -353,6 +581,16 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     null
   );
 
+  const [showPoly, setShowPoly] = useState(true);
+
+  // show/hide curves
+  const [visibleIds, setVisibleIds] = useState<Set<string>>(() => new Set());
+  const [visOpen, setVisOpen] = useState(false);
+  const visRef = useRef<HTMLDivElement | null>(null);
+
+  // per-series color (index into COLOR_OPTIONS)
+  const [colorById, setColorById] = useState<Record<string, number>>({});
+
   const nameBeforeRef = useRef<string | null>(null);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -362,10 +600,8 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
   const prevDomainYRef = useRef<[number, number]>(view.domainY);
 
   const tickDragRef = useRef<null | { axis: "x" | "y"; index: number; before: AxisWarp; pointerId: number }>(null);
-
   const pointDragRef = useRef<null | { seriesId: string; index: number; before: Point; pointerId: number }>(null);
 
-  // Pan (variant A): frozen inversion on startView/startWarp
   const panRef = useRef<
     null | {
       pointerId: number;
@@ -377,13 +613,137 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     }
   >(null);
 
-  // ===== Zoom refs/txn =====
   const viewRef = useRef(view);
   useEffect(() => {
     viewRef.current = view;
   }, [view]);
 
   const zoomTxnRef = useRef<{ before: View; timer: number | null } | null>(null);
+
+  const panel0 = panels[0] ?? { series: [] };
+  const seriesList = panel0.series;
+
+  useEffect(() => {
+    if (activeSeriesId && seriesList.some((s) => s.id === activeSeriesId)) return;
+    setActiveSeriesId(seriesList[0]?.id ?? null);
+  }, [activeSeriesId, seriesList]);
+
+  const activeSeries = useMemo(
+    () => seriesList.find((s) => s.id === activeSeriesId) ?? null,
+    [seriesList, activeSeriesId]
+  );
+
+  // ===== Fix BUG #1: do NOT re-add hidden series on any edit =====
+  const prevIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    const currIds = seriesList.map((s) => s.id);
+    const prevIds = prevIdsRef.current;
+
+    const prevSet = new Set(prevIds);
+    const currSet = new Set(currIds);
+
+    const added = currIds.filter((id) => !prevSet.has(id));
+    const removed = prevIds.filter((id) => !currSet.has(id));
+
+    setVisibleIds((prevVis) => {
+      const next = new Set(prevVis);
+
+      // init on first mount
+      if (prevIds.length === 0 && next.size === 0) {
+        currIds.forEach((id) => next.add(id));
+        return next;
+      }
+
+      // remove deleted series from visibility
+      for (const id of removed) next.delete(id);
+
+      // add ONLY newly added series (do not restore manually hidden)
+      for (const id of added) next.add(id);
+
+      // keep at least one visible
+      if (currIds.length && next.size === 0) next.add(currIds[0]);
+
+      return next;
+    });
+
+    prevIdsRef.current = currIds;
+  }, [seriesList]);
+
+  // keep active visible
+  useEffect(() => {
+    if (!activeSeriesId) return;
+    setVisibleIds((prev) => {
+      if (prev.has(activeSeriesId)) return prev;
+      const next = new Set(prev);
+      next.add(activeSeriesId);
+      return next;
+    });
+  }, [activeSeriesId]);
+
+  // if selection becomes hidden -> clear
+  useEffect(() => {
+    if (selection && !visibleIds.has(selection.seriesId)) setSelection(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleIds]);
+
+  // sync colors with series list (add new, remove missing)
+  useEffect(() => {
+    const ids = seriesList.map((s) => s.id);
+    setColorById((prev) => {
+      const next: Record<string, number> = {};
+      const used = new Set<number>();
+
+      // keep existing where possible
+      for (const id of ids) {
+        const idx = prev[id];
+        if (typeof idx === "number") {
+          next[id] = clamp(idx, 0, COLOR_OPTIONS.length - 1);
+          used.add(next[id]);
+        }
+      }
+
+      // assign for new
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        if (next[id] != null) continue;
+        const prefer = i % COLOR_OPTIONS.length;
+        const idx = defaultColorIndex(prefer, used);
+        next[id] = idx;
+        used.add(idx);
+      }
+
+      return next;
+    });
+  }, [seriesList]);
+
+  // close visibility dropdown on outside click
+  useEffect(() => {
+    if (!visOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const el = visRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && !el.contains(e.target)) setVisOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [visOpen]);
+
+  // polynomial card for LSQ
+  const polyInfo = useMemo(() => {
+    if (!activeSeries || activeSeries.interp !== "lsq") return null;
+    const pts = activeSeries.points.slice().sort((a, b) => a.x - b.x);
+    const degWanted = Math.min(LSQ_MAX_DEG, Math.max(1, pts.length - 1));
+    const fit = lsqFit(pts, degWanted);
+    if (!fit) return { err: "Невозможно выполнить МНК (нужны хотя бы 2 разные точки по X)." as const };
+    return { degree: fit.degree, formula: polyFormula(fit.aX) };
+  }, [activeSeries]);
+
+  const layout = useMemo(() => {
+    const m = { l: 56, r: 18, t: 16, b: 44 };
+    const pw = Math.max(50, bbox.w - m.l - m.r);
+    const ph = Math.max(50, bbox.h - m.t - m.b);
+    return { ...m, pw, ph };
+  }, [bbox]);
 
   const pushUndo = (p: Patch) => setUndo((u) => [p, ...u].slice(0, 50));
 
@@ -442,24 +802,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     return () => ro.disconnect();
   }, []);
 
-  const panel0 = panels[0] ?? { series: [] };
-  const seriesList = panel0.series;
-
-  useEffect(() => {
-    if (activeSeriesId && seriesList.some((s) => s.id === activeSeriesId)) return;
-    setActiveSeriesId(seriesList[0]?.id ?? null);
-  }, [activeSeriesId, seriesList]);
-
-  const activeSeries = useMemo(() => seriesList.find((s) => s.id === activeSeriesId) ?? null, [seriesList, activeSeriesId]);
-
-  const layout = useMemo(() => {
-    const m = { l: 56, r: 18, t: 16, b: 44 };
-    const pw = Math.max(50, bbox.w - m.l - m.r);
-    const ph = Math.max(50, bbox.h - m.t - m.b);
-    return { ...m, pw, ph };
-  }, [bbox]);
-
-  // keep warps consistent with domain changes (outside drag computations)
+  // keep warps consistent with domain changes
   useEffect(() => {
     const oldD = prevDomainXRef.current;
     const newD = view.domainX;
@@ -492,8 +835,8 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     const sx = (x: number) => axisValueToScreen(x, view.domainX, warpX);
     const sy = (y: number) => axisValueToScreen(y, view.domainY, warpY);
 
-    const mapX = (x: number) => layout.l + clamp(sx(x), 0, 1) * layout.pw;
-    const mapY = (y: number) => layout.t + layout.ph - clamp(sy(y), 0, 1) * layout.ph;
+    const mapX = (x: number) => layout.l + sx(x) * layout.pw;
+    const mapY = (y: number) => layout.t + layout.ph - sy(y) * layout.ph;
 
     const invX = (px: number) => {
       const s = (clamp(px, layout.l, layout.l + layout.pw) - layout.l) / (layout.pw || 1);
@@ -539,8 +882,14 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     return () => el.removeEventListener("wheel", onWheel);
   }, [scale, gridDragAxis]);
 
-  const ticksX = useMemo(() => (warpX ? warpX.dataKnots : niceTicks(view.domainX[0], view.domainX[1], 6)), [warpX, view.domainX]);
-  const ticksY = useMemo(() => (warpY ? warpY.dataKnots : niceTicks(view.domainY[0], view.domainY[1], 6)), [warpY, view.domainY]);
+  const ticksX = useMemo(
+    () => (warpX ? warpX.dataKnots : niceTicks(view.domainX[0], view.domainX[1], 6)),
+    [warpX, view.domainX]
+  );
+  const ticksY = useMemo(
+    () => (warpY ? warpY.dataKnots : niceTicks(view.domainY[0], view.domainY[1], 6)),
+    [warpY, view.domainY]
+  );
 
   const commitResultJson = (nextPanels: Panel[]) => {
     if (!onResultJsonChange) return;
@@ -574,10 +923,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     pushUndo({ type: "set-domain", before, after });
   };
 
-  const deleteSelectedPoint = () => {
-    if (!selection) return;
-    const { seriesId, index } = selection;
-
+  const deletePointAt = (seriesId: string, index: number) => {
     setPanelsAndEmit((prev) => {
       const next = structuredClone(prev) as Panel[];
       const p0 = next[0] ?? { series: [] };
@@ -591,7 +937,20 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
       return next;
     });
 
-    setSelection(null);
+    setSelection((sel) => {
+      if (!sel) return sel;
+      if (sel.seriesId !== seriesId) return sel;
+      if (sel.index === index) return null;
+      if (sel.index > index) return { seriesId, index: sel.index - 1 };
+      return sel;
+    });
+
+    setHover(null);
+  };
+
+  const deleteSelectedPoint = () => {
+    if (!selection) return;
+    deletePointAt(selection.seriesId, selection.index);
   };
 
   const onUndo = () => {
@@ -662,6 +1021,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     });
   };
 
+  // hotkeys
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
@@ -676,6 +1036,8 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         setMode("select");
         setGridDragAxis(null);
         setPanMode(false);
+        setHover(null);
+        setVisOpen(false);
         return;
       }
 
@@ -692,7 +1054,12 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
   }, [selection, undo.length]);
 
   const addSeries = () => {
-    const s: Series = { id: uid("series"), name: `Кривая ${seriesList.length + 1}`, interp: "linear", points: [] };
+    const s: Series = {
+      id: uid("series"),
+      name: `Кривая ${seriesList.length + 1}`,
+      interp: "linear",
+      points: [],
+    };
 
     setPanelsAndEmit((prev) => {
       const next = structuredClone(prev) as Panel[];
@@ -729,12 +1096,13 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
 
     setSelection(null);
     setActiveSeriesId(null);
+    setHover(null);
   };
 
-  const toggleInterp = () => {
+  const cycleInterp = () => {
     if (!activeSeries) return;
     const before = activeSeries.interp;
-    const after: Series["interp"] = before === "linear" ? "poly" : "linear";
+    const after: Series["interp"] = before === "linear" ? "poly" : before === "poly" ? "lsq" : "linear";
 
     setPanelsAndEmit((prev) => {
       const next = structuredClone(prev) as Panel[];
@@ -754,6 +1122,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     setMode("select");
     setErr(null);
     setSelection(null);
+    setHover(null);
 
     if (axis === "x") {
       setWarpX((w) => w ?? buildWarpFromTicks(view.domainX, 6));
@@ -900,6 +1269,14 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
       return;
     }
 
+    if (mode === "delete-point") {
+      e.preventDefault();
+      e.stopPropagation();
+      setErr(null);
+      deletePointAt(seriesId, index);
+      return;
+    }
+
     e.preventDefault();
     e.stopPropagation();
 
@@ -930,13 +1307,14 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         const s = (clamp(px, layout.l, layout.l + layout.pw) - layout.l) / (layout.pw || 1);
         applyTickDrag("x", t.index, clamp(s, 0, 1));
       } else {
-        const s = (layout.t + layout.ph - clamp(py, layout.t, layout.t + layout.ph)) / (layout.ph || 1);
+        const s =
+          (layout.t + layout.ph - clamp(py, layout.t, layout.t + layout.ph)) / (layout.ph || 1);
         applyTickDrag("y", t.index, clamp(s, 0, 1));
       }
       return;
     }
 
-    // pan (variant A): compute dx/dy using startView/startWarp only
+    // pan
     if (panRef.current) {
       const p = panRef.current;
       if (e.pointerId !== p.pointerId) return;
@@ -959,7 +1337,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
       return;
     }
 
-    // point drag
+    // point drag + tooltip
     if (pointDragRef.current) {
       const d = pointDragRef.current;
       if (e.pointerId !== d.pointerId) return;
@@ -985,6 +1363,10 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         s.points[d.index] = { x, y };
         return next;
       });
+
+      const seriesName = seriesList.find((s) => s.id === d.seriesId)?.name ?? "Кривая";
+      setHover({ cx: scale.mapX(x), cy: scale.mapY(y), x, y, seriesName });
+      return;
     }
   };
 
@@ -1032,10 +1414,19 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
       const after = s?.points?.[d.index];
       if (!after) return;
 
-      const moved = Math.abs(after.x - d.before.x) > 1e-12 || Math.abs(after.y - d.before.y) > 1e-12;
+      const moved =
+        Math.abs(after.x - d.before.x) > 1e-12 || Math.abs(after.y - d.before.y) > 1e-12;
       if (moved) {
-        pushUndo({ type: "move-point", seriesId: d.seriesId, index: d.index, before: d.before, after: { ...after } });
+        pushUndo({
+          type: "move-point",
+          seriesId: d.seriesId,
+          index: d.index,
+          before: d.before,
+          after: { ...after },
+        });
       }
+
+      setHover(null);
     }
   };
 
@@ -1045,12 +1436,34 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
       return `M ${pts.map((p) => `${scale.mapX(p.x)} ${scale.mapY(p.y)}`).join(" L ")}`;
     };
 
-    return seriesList.map((s) => {
-      const pts = s.points.slice().sort((a, b) => a.x - b.x);
-      const polyPts = s.interp === "poly" ? splineSample(pts, 300) : pts;
-      return { id: s.id, d: mkPath(polyPts) };
-    });
-  }, [seriesList, scale]);
+    return seriesList
+      .map((s) => {
+        if (!visibleIds.has(s.id)) return null;
+
+        const pts = s.points.slice().sort((a, b) => a.x - b.x);
+
+        let drawPts = pts;
+
+        if (s.interp === "poly") {
+          drawPts = splineSample(pts, 300);
+        } else if (s.interp === "lsq") {
+          const degWanted = Math.min(LSQ_MAX_DEG, Math.max(1, pts.length - 1));
+          const fit = lsqFit(pts, degWanted);
+          if (fit) {
+            const N = 300;
+            const out: Point[] = [];
+            for (let k = 0; k <= N; k++) {
+              const x = fit.xMin + ((fit.xMax - fit.xMin) * k) / N;
+              out.push({ x, y: evalPolyCoeffs(fit.aX, x) });
+            }
+            drawPts = out;
+          }
+        }
+
+        return { id: s.id, d: mkPath(drawPts) };
+      })
+      .filter(Boolean) as { id: string; d: string }[];
+  }, [seriesList, scale, visibleIds]);
 
   const domainInputs = (
     <div className="grid grid-cols-2 gap-3">
@@ -1058,28 +1471,14 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         <div className="text-xs text-slate-500 dark:text-slate-400">X min / max</div>
         <div className="mt-1 grid grid-cols-2 gap-2">
           <input
-            className="w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none transition focus:ring-2 focus:ring-slate-400 dark:bg-slate-950 dark:ring-slate-800"
-            value={String(view.domainX[0])}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              if (!Number.isFinite(v)) return;
-              const before = view;
-              const after: View = { ...view, domainX: [v, view.domainX[1]] };
-              setView(after);
-              pushUndo({ type: "set-domain", before, after });
-            }}
+            readOnly
+            className="w-full cursor-default rounded-xl bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-200 outline-none dark:bg-slate-950 dark:ring-slate-800"
+            value={formatTick(view.domainX[0])}
           />
           <input
-            className="w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none transition focus:ring-2 focus:ring-slate-400 dark:bg-slate-950 dark:ring-slate-800"
-            value={String(view.domainX[1])}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              if (!Number.isFinite(v)) return;
-              const before = view;
-              const after: View = { ...view, domainX: [view.domainX[0], v] };
-              setView(after);
-              pushUndo({ type: "set-domain", before, after });
-            }}
+            readOnly
+            className="w-full cursor-default rounded-xl bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-200 outline-none dark:bg-slate-950 dark:ring-slate-800"
+            value={formatTick(view.domainX[1])}
           />
         </div>
       </div>
@@ -1088,28 +1487,14 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         <div className="text-xs text-slate-500 dark:text-slate-400">Y min / max</div>
         <div className="mt-1 grid grid-cols-2 gap-2">
           <input
-            className="w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none transition focus:ring-2 focus:ring-slate-400 dark:bg-slate-950 dark:ring-slate-800"
-            value={String(view.domainY[0])}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              if (!Number.isFinite(v)) return;
-              const before = view;
-              const after: View = { ...view, domainY: [v, view.domainY[1]] };
-              setView(after);
-              pushUndo({ type: "set-domain", before, after });
-            }}
+            readOnly
+            className="w-full cursor-default rounded-xl bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-200 outline-none dark:bg-slate-950 dark:ring-slate-800"
+            value={formatTick(view.domainY[0])}
           />
           <input
-            className="w-full rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 outline-none transition focus:ring-2 focus:ring-slate-400 dark:bg-slate-950 dark:ring-slate-800"
-            value={String(view.domainY[1])}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              if (!Number.isFinite(v)) return;
-              const before = view;
-              const after: View = { ...view, domainY: [view.domainY[0], v] };
-              setView(after);
-              pushUndo({ type: "set-domain", before, after });
-            }}
+            readOnly
+            className="w-full cursor-default rounded-xl bg-slate-50 px-3 py-2 text-sm ring-1 ring-slate-200 outline-none dark:bg-slate-950 dark:ring-slate-800"
+            value={formatTick(view.domainY[1])}
           />
         </div>
       </div>
@@ -1123,9 +1508,41 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
       ? "Режим: перетаскивание тиков по Y"
       : panMode
       ? "Режим: перемещение (Pan)"
+      : mode === "delete-point"
+      ? "Режим: удаление точек (клик по точке)"
       : mode === "add-point"
       ? "Режим: добавление точки (клик по полю)"
       : "";
+
+  const clipId = useMemo(() => uid("plotClip"), []);
+
+  const toggleVisible = (id: string) => {
+    setVisibleIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      if (seriesList.length && next.size === 0) next.add(id);
+      return next;
+    });
+  };
+
+  const showAll = () => setVisibleIds(new Set(seriesList.map((s) => s.id)));
+  const showOnlyActive = () => {
+    if (!activeSeriesId) return;
+    setVisibleIds(new Set([activeSeriesId]));
+  };
+
+  const setSeriesColor = (id: string, idx: number) => {
+    setColorById((prev) => ({ ...prev, [id]: clamp(idx, 0, COLOR_OPTIONS.length - 1) }));
+  };
+
+  const cycleSeriesColor = (id: string) => {
+    setColorById((prev) => {
+      const cur = prev[id] ?? 0;
+      const nextIdx = (cur + 1) % COLOR_OPTIONS.length;
+      return { ...prev, [id]: nextIdx };
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -1189,6 +1606,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
                 setMode("select");
                 setSelection(null);
                 setGridDragAxis(null);
+                setHover(null);
               }
               return next;
             });
@@ -1201,8 +1619,11 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
           variant={mode === "add-point" ? "primary" : "secondary"}
           type="button"
           onClick={() => {
+            setErr(null);
             setPanMode(false);
             setGridDragAxis(null);
+            setHover(null);
+            setSelection(null);
             setMode((m) => (m === "add-point" ? "select" : "add-point"));
           }}
           disabled={gridDragAxis !== null || panMode}
@@ -1212,11 +1633,18 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         </Button>
 
         <Button
-          variant="secondary"
+          variant={mode === "delete-point" ? "primary" : "secondary"}
           type="button"
-          onClick={deleteSelectedPoint}
-          disabled={!selection || panMode}
-          title={!selection ? "Выберите точку" : "Удалить выбранную точку"}
+          onClick={() => {
+            setErr(null);
+            setPanMode(false);
+            setGridDragAxis(null);
+            setHover(null);
+            setSelection(null);
+            setMode((m) => (m === "delete-point" ? "select" : "delete-point"));
+          }}
+          disabled={gridDragAxis !== null || panMode}
+          title="Режим удаления: клик по точке удаляет её"
         >
           − точка
         </Button>
@@ -1232,12 +1660,100 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         <Button
           variant="secondary"
           type="button"
-          onClick={toggleInterp}
+          onClick={cycleInterp}
           disabled={!activeSeries}
           title="Переключить интерполяцию для активной кривой"
         >
-          {activeSeries?.interp === "poly" ? "Полином" : "Линии"}
+          {activeSeries ? interpLabel(activeSeries.interp) : "Интерп."}
         </Button>
+
+        {activeSeries?.interp === "lsq" && (
+          <Button variant="secondary" type="button" onClick={() => setShowPoly((v) => !v)}>
+            {showPoly ? "Скрыть полином" : "Показать полином"}
+          </Button>
+        )}
+
+        {/* dropdown: show/hide curves */}
+        <div className="relative" ref={visRef}>
+          <Button
+            variant="secondary"
+            type="button"
+            onClick={() => setVisOpen((v) => !v)}
+            disabled={seriesList.length === 0}
+          >
+            Кривые ({visibleIds.size}/{seriesList.length})
+          </Button>
+
+          {visOpen && (
+            <div className="absolute left-0 z-30 mt-2 w-80 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2 dark:border-slate-800">
+                <div className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                  Быстрый выбор
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+                    onClick={showAll}
+                  >
+                    Все
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg ring-1 ring-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-100
+                               dark:bg-slate-800/60 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-800"
+                    onClick={showOnlyActive}
+                    disabled={!activeSeriesId}
+                  >
+                    Только активную
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-72 overflow-auto py-1">
+                {seriesList.map((s) => {
+                  const checked = visibleIds.has(s.id);
+                  const cIdx = colorById[s.id] ?? 0;
+                  const col = COLOR_OPTIONS[cIdx];
+
+                  return (
+                    <div
+                      key={s.id}
+                      className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={checked}
+                        onChange={() => toggleVisible(s.id)}
+                      />
+
+                      <button
+                        type="button"
+                        className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800"
+                        title="Клик: сменить цвет"
+                        onClick={() => cycleSeriesColor(s.id)}
+                      >
+                        <span className={`h-2.5 w-2.5 rounded-full ${col.dot}`} />
+                        <span className="text-xs text-slate-500 dark:text-slate-400">цвет</span>
+                      </button>
+
+                      <div className="min-w-0 flex-1 text-sm text-slate-800 dark:text-slate-200">
+                        {ellipsis(s.name, 34)}
+                      </div>
+
+                      {s.id === activeSeriesId && (
+                        <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                          active
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
 
         <Button
           variant={gridDragAxis === "x" ? "primary" : "secondary"}
@@ -1273,6 +1789,27 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
             />
             <div className="text-xs text-slate-500 dark:text-slate-400">{pointRadius}px</div>
           </div>
+
+          {/* Color select for active series */}
+          {activeSeries && (
+            <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+              <span className="text-xs text-slate-600 dark:text-slate-300">Цвет</span>
+              <span
+                className={`h-2.5 w-2.5 rounded-full ${COLOR_OPTIONS[colorById[activeSeries.id] ?? 0].dot}`}
+              />
+              <select
+                className="h-8 rounded-lg bg-white px-2 text-sm ring-1 ring-slate-200 outline-none dark:bg-slate-950 dark:ring-slate-800"
+                value={colorById[activeSeries.id] ?? 0}
+                onChange={(e) => setSeriesColor(activeSeries.id, Number(e.target.value))}
+              >
+                {COLOR_OPTIONS.map((c, i) => (
+                  <option key={c.id} value={i}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <input
             className="h-10 w-56 rounded-xl bg-white px-3 text-sm ring-1 ring-slate-200 outline-none transition
@@ -1317,6 +1854,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
             onChange={(e) => {
               setActiveSeriesId(e.target.value || null);
               setSelection(null);
+              setHover(null);
             }}
           >
             {seriesList.length === 0 ? (
@@ -1331,6 +1869,25 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
           </select>
         </div>
       </div>
+
+      {activeSeries?.interp === "lsq" && showPoly && (
+        <Card
+          title="Многочлен МНК"
+          description={
+            polyInfo && "err" in polyInfo ? "—" : polyInfo ? `Степень: ${polyInfo.degree}` : "—"
+          }
+        >
+          {polyInfo && "err" in polyInfo ? (
+            <Alert variant="danger" title="Ошибка">
+              {polyInfo.err}
+            </Alert>
+          ) : (
+            <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-900 ring-1 ring-slate-200 dark:bg-slate-950 dark:text-slate-100 dark:ring-slate-800">
+              <div className="font-mono">{polyInfo?.formula ?? "—"}</div>
+            </div>
+          )}
+        </Card>
+      )}
 
       {domainInputs}
 
@@ -1350,13 +1907,25 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         <svg
           ref={svgRef}
           className="block h-[420px] w-full touch-none"
-          style={{ cursor: panMode ? "grab" : "default" }}
+          style={{ cursor: panMode ? "grab" : mode === "delete-point" ? "crosshair" : "default" }}
           onPointerDown={onSvgPointerDown}
           onPointerMove={onSvgPointerMove}
           onPointerUp={onSvgPointerUp}
           onPointerCancel={onSvgPointerUp}
         >
-          <rect x={layout.l} y={layout.t} width={layout.pw} height={layout.ph} className="fill-slate-50 dark:fill-slate-950" />
+          <defs>
+            <clipPath id={clipId}>
+              <rect x={layout.l} y={layout.t} width={layout.pw} height={layout.ph} />
+            </clipPath>
+          </defs>
+
+          <rect
+            x={layout.l}
+            y={layout.t}
+            width={layout.pw}
+            height={layout.ph}
+            className="fill-slate-50 dark:fill-slate-950"
+          />
 
           {ticksX.map((t, i) => {
             const x = scale.mapX(t);
@@ -1370,10 +1939,20 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
                   y1={layout.t}
                   x2={x}
                   y2={layout.t + layout.ph}
-                  className={editable ? "stroke-blue-400/70 dark:stroke-blue-400/70" : "stroke-slate-200 dark:stroke-slate-800"}
+                  className={
+                    editable
+                      ? "stroke-blue-400/70 dark:stroke-blue-400/70"
+                      : "stroke-slate-200 dark:stroke-slate-800"
+                  }
                   strokeWidth={editable ? 2 : 1}
                 />
-                <text x={x} y={layout.t + layout.ph + 18} textAnchor="middle" className="fill-slate-500 dark:fill-slate-400" fontSize={11}>
+                <text
+                  x={x}
+                  y={layout.t + layout.ph + 18}
+                  textAnchor="middle"
+                  className="fill-slate-500 dark:fill-slate-400"
+                  fontSize={11}
+                >
                   {formatTick(t)}
                 </text>
               </g>
@@ -1392,58 +1971,93 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
                   y1={y}
                   x2={layout.l + layout.pw}
                   y2={y}
-                  className={editable ? "stroke-blue-400/70 dark:stroke-blue-400/70" : "stroke-slate-200 dark:stroke-slate-800"}
+                  className={
+                    editable
+                      ? "stroke-blue-400/70 dark:stroke-blue-400/70"
+                      : "stroke-slate-200 dark:stroke-slate-800"
+                  }
                   strokeWidth={editable ? 2 : 1}
                 />
-                <text x={layout.l - 10} y={y + 4} textAnchor="end" className="fill-slate-500 dark:fill-slate-400" fontSize={11}>
+                <text
+                  x={layout.l - 10}
+                  y={y + 4}
+                  textAnchor="end"
+                  className="fill-slate-500 dark:fill-slate-400"
+                  fontSize={11}
+                >
                   {formatTick(t)}
                 </text>
               </g>
             );
           })}
 
-          <rect x={layout.l} y={layout.t} width={layout.pw} height={layout.ph} className="fill-transparent stroke-slate-300 dark:stroke-slate-700" strokeWidth={1} />
+          <rect
+            x={layout.l}
+            y={layout.t}
+            width={layout.pw}
+            height={layout.ph}
+            className="fill-transparent stroke-slate-300 dark:stroke-slate-700"
+            strokeWidth={1}
+          />
 
-          {paths.map((p) => (
-            <path
-              key={p.id}
-              d={p.d}
-              fill="none"
-              strokeWidth={2}
-              className={p.id === activeSeriesId ? "stroke-slate-900 dark:stroke-slate-100" : "stroke-slate-400 dark:stroke-slate-600"}
-            />
-          ))}
-
-          {seriesList.map((s) =>
-            s.points.map((pt, i) => {
-              const cx = scale.mapX(pt.x);
-              const cy = scale.mapY(pt.y);
-              const selected = selection?.seriesId === s.id && selection.index === i;
-              const active = s.id === activeSeriesId;
-              const r = selected ? pointRadius + 1 : pointRadius;
-
+          {/* curves + points */}
+          <g clipPath={`url(#${clipId})`}>
+            {paths.map((p) => {
+              const cIdx = colorById[p.id] ?? 0;
+              const col = COLOR_OPTIONS[cIdx];
+              const active = p.id === activeSeriesId;
               return (
-                <circle
-                  key={`${s.id}_${i}`}
-                  cx={cx}
-                  cy={cy}
-                  r={r}
-                  className={
-                    active
-                      ? "fill-white stroke-slate-900 dark:fill-blue-500/15 dark:stroke-blue-400"
-                      : "fill-white stroke-slate-400 dark:fill-blue-500/10 dark:stroke-blue-500/60"
-                  }
-                  strokeWidth={2}
-                  onPointerDown={(e) => onHandlePointerDown(e, s.id, i)}
-                  onPointerEnter={() => setHover({ cx, cy, x: pt.x, y: pt.y, seriesName: s.name })}
-                  onPointerLeave={() => setHover(null)}
+                <path
+                  key={p.id}
+                  d={p.d}
+                  fill="none"
+                  strokeWidth={active ? 3 : 2}
+                  className={`${col.path} ${active ? "opacity-100" : "opacity-70"}`}
                 />
               );
-            })
-          )}
+            })}
+
+            {seriesList.map((s) => {
+              if (!visibleIds.has(s.id)) return null;
+              const cIdx = colorById[s.id] ?? 0;
+              const col = COLOR_OPTIONS[cIdx];
+
+              return s.points.map((pt, i) => {
+                const cx = scale.mapX(pt.x);
+                const cy = scale.mapY(pt.y);
+
+                const selected = selection?.seriesId === s.id && selection.index === i;
+                const active = s.id === activeSeriesId;
+
+                const r = selected ? pointRadius + 1 : pointRadius;
+
+                return (
+                  <circle
+                    key={`${s.id}_${i}`}
+                    cx={cx}
+                    cy={cy}
+                    r={r}
+                    className={`${col.pointFill} ${active ? "opacity-100" : "opacity-85"}`}
+                    strokeWidth={0} // без обводки
+                    style={{ cursor: mode === "delete-point" ? "pointer" : undefined }}
+                    onPointerDown={(e) => onHandlePointerDown(e, s.id, i)}
+                    onPointerEnter={() =>
+                      setHover({ cx, cy, x: pt.x, y: pt.y, seriesName: s.name })
+                    }
+                    onPointerLeave={() => setHover(null)}
+                  />
+                );
+              });
+            })}
+          </g>
 
           {hint && (
-            <text x={layout.l + 10} y={layout.t + 18} className="fill-slate-500 dark:fill-slate-400" fontSize={12}>
+            <text
+              x={layout.l + 10}
+              y={layout.t + 18}
+              className="fill-slate-500 dark:fill-slate-400"
+              fontSize={12}
+            >
               {hint}
             </text>
           )}

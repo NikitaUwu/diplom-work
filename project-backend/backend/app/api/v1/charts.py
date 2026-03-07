@@ -1,4 +1,5 @@
 from pathlib import Path
+import codecs
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status, Response, Body
 from fastapi.responses import FileResponse
@@ -11,10 +12,14 @@ from app.db.models.chart import Chart
 from app.schemas.chart import ChartCreateResponse, ChartStatus
 from app.schemas.ml import Panel
 from app.services.charts import ChartService
-from app.utils.export import export_to_csv, export_to_txt, export_to_json
+from app.utils.export import export_to_csv, export_to_txt, export_to_json, export_to_table_csv
 
 router = APIRouter()
 chart_service = ChartService()
+
+
+def _csv_excel_bytes(s: str) -> bytes:
+    return codecs.BOM_UTF16_LE + s.encode("utf-16-le")
 
 
 def _get_user_chart_or_404(db: Session, chart_id: int, user_id: int) -> Chart:
@@ -74,7 +79,6 @@ def _resolve_in_storage(raw_path: str, *, allow_absolute: bool) -> Path:
     else:
         file_path = (storage_root / p).resolve()
 
-    # path traversal protection
     if file_path != storage_root and storage_root not in file_path.parents:
         raise HTTPException(status_code=400, detail="Invalid file path")
 
@@ -170,10 +174,35 @@ def export_chart_csv(
     panels = _parse_panels_or_409(chart)
 
     content = export_to_csv(panels, panel_id=panel_id, series_id=series_id)
+    body = _csv_excel_bytes(content)
+
     return Response(
-        content=content,
-        media_type="text/csv; charset=utf-8",
+        content=body,
+        media_type="application/vnd.ms-excel",
         headers={"Content-Disposition": f'attachment; filename="chart_{chart_id}.csv"'},
+    )
+
+
+@router.get("/{chart_id}/export.table.csv")
+def export_chart_table_csv(
+    chart_id: int,
+    panel_id: str | None = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    chart = _get_user_chart_or_404(db, chart_id, current_user.id)
+    panels = _parse_panels_or_409(chart)
+
+    content = export_to_table_csv(panels, panel_id=panel_id)
+    if not content:
+        raise HTTPException(status_code=409, detail="Export is not available yet")
+
+    body = _csv_excel_bytes(content)
+
+    return Response(
+        content=body,
+        media_type="application/vnd.ms-excel",
+        headers={"Content-Disposition": f'attachment; filename="chart_{chart_id}_table.csv"'},
     )
 
 
@@ -238,7 +267,6 @@ def get_original_image(
 ):
     chart = _get_user_chart_or_404(db, chart_id, current_user.id)
 
-    # поддерживает и относительные, и абсолютные пути (но только внутри storage_dir)
     file_path = _resolve_in_storage(chart.original_path, allow_absolute=True)
 
     if not file_path.is_file():
@@ -255,7 +283,6 @@ def delete_chart(
 ):
     chart = _get_user_chart_or_404(db, chart_id, current_user.id)
 
-    # удаление файлов безопасно внутри storage_dir
     db.delete(chart)
     db.commit()
 
@@ -274,7 +301,13 @@ def update_chart_result_json(
     if chart.status != ChartStatus.done.value:
         raise HTTPException(status_code=409, detail="Chart is not ready for editing")
 
-    panels = _parse_panels(payload)
+    panels = _parse_panels(
+        payload,
+        missing_status=400,
+        invalid_status=400,
+        missing_detail="Invalid panels",
+        invalid_detail="Invalid panels",
+    )
 
     chart.result_json = payload
     chart.n_panels = len(panels)

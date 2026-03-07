@@ -214,3 +214,7 @@ export async function updateChartResultJson(
   if (!res.ok) throw new Error(`Save failed: ${await readError(res)}`);
   return res.json();
 }
+
+export function exportTableCsvUrl(chartId: number): string {
+  return apiUrl(`/charts/${chartId}/export.table.csv`);
+}

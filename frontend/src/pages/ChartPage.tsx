@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import Carousel, { type CarouselItem } from "../components/Carousel";
 import {
+  artifactUrl,
   exportCsvUrl,
   exportJsonUrl,
   exportTxtUrl,
+  exportTableCsvUrl,
   getChart,
+  originalUrl,
   updateChartResultJson,
   type ChartCreateResponse,
   type ChartStatus,
@@ -15,9 +19,7 @@ import Badge from "../components/ui/Badge";
 import Alert from "../components/ui/Alert";
 import Spinner from "../components/ui/Spinner";
 import DropdownButton from "../components/ui/DropdownButton";
-import ArtifactsPanel from "../components/ArtifactsPanel";
 import GraphEditor from "../components/GraphEditor";
-
 
 function statusLabel(s: ChartStatus) {
   switch (s) {
@@ -47,6 +49,30 @@ function statusVariant(s: ChartStatus) {
   }
 }
 
+function buildArtifactsCarousel(chart: ChartCreateResponse): CarouselItem[] {
+  const rj: any = chart.result_json ?? {};
+  const artifacts: Record<string, string> =
+    (rj && typeof rj === "object" ? rj.artifacts : {}) || {};
+
+  const items: CarouselItem[] = [
+    { label: "Оригинал", src: originalUrl(chart.id) },
+
+    artifacts["lineformer_prediction"]
+      ? { label: "LineFormer", src: artifactUrl(chart.id, "lineformer_prediction") }
+      : null,
+
+    artifacts["chartdete_predictions"]
+      ? { label: "ChartDete", src: artifactUrl(chart.id, "chartdete_predictions") }
+      : null,
+
+    artifacts["converted_plot"]
+      ? { label: "Plot", src: artifactUrl(chart.id, "converted_plot") }
+      : null,
+  ].filter(Boolean) as CarouselItem[];
+
+  return items;
+}
+
 export default function ChartPage() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -54,6 +80,7 @@ export default function ChartPage() {
 
   const [chart, setChart] = useState<ChartCreateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+
   const [editedResultJson, setEditedResultJson] = useState<any | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -99,6 +126,8 @@ export default function ChartPage() {
 
   useEffect(() => {
     setEditedResultJson(null);
+    setDirty(false);
+    setSaveError(null);
   }, [chartId]);
 
   useEffect(() => {
@@ -125,8 +154,10 @@ export default function ChartPage() {
 
   const canExport = chart?.status === "done" && chart.result_json;
 
+  const artifactsItems = useMemo(() => (chart ? buildArtifactsCarousel(chart) : []), [chart]);
+
   const showArtifacts = Boolean(chart);
-  const showPlot = chart?.status === "done";
+  const showEditor = chart?.status === "done";
 
   return (
     <div className="min-h-full">
@@ -153,23 +184,15 @@ export default function ChartPage() {
                 На главную страницу
               </Button>
 
-              <Button
-                variant="primary"
-                onClick={onSave}
-                disabled={!dirty || saving || chart?.status !== "done"}
-                loading={saving}
-              >
-                Сохранить
-              </Button>
-
               <DropdownButton
                 label="Скачать"
                 variant="primary"
                 disabled={!canExport}
                 items={[
-                  { label: "CSV", href: exportCsvUrl(chartId), disabled: !canExport },
-                  { label: "TXT", href: exportTxtUrl(chartId), disabled: !canExport },
-                  { label: "JSON", href: exportJsonUrl(chartId), disabled: !canExport },
+                  { label: "CSV", href: exportCsvUrl(chartId) },
+                  { label: "TXT", href: exportTxtUrl(chartId) },
+                  { label: "JSON", href: exportJsonUrl(chartId) },
+                  { label: "TABLE", href: exportTableCsvUrl(chartId) }
                 ]}
               />
             </div>
@@ -200,27 +223,41 @@ export default function ChartPage() {
           </div>
         )}
 
-        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <div className="mt-6 space-y-6">
           {showArtifacts && (
             <Card
-              className={showPlot ? "lg:col-span-5" : "lg:col-span-12"}
               title="Артефакты"
-              description="Диагностические изображения (LineFormer/ChartDete и, если есть, plot)."
+              description="Оригинал + диагностические изображения (LineFormer/ChartDete и, если есть, plot)."
               right={
                 chart && (chart.status === "processing" || chart.status === "uploaded") ? (
                   <Spinner />
                 ) : null
               }
             >
-              <ArtifactsPanel chartId={chart!.id} resultJson={chart!.result_json} />
+              {artifactsItems.length ? (
+                <Carousel items={artifactsItems} />
+              ) : (
+                <div className="text-sm text-slate-600 dark:text-slate-400">
+                  Артефакты пока не доступны.
+                </div>
+              )}
             </Card>
           )}
 
-          {showPlot && (
+          {showEditor && (
             <Card
-              className="lg:col-span-7"
               title="Интерактивный редактор"
               description="Редактирование извлечённых точек"
+              right={
+                <Button
+                  variant="primary"
+                  onClick={onSave}
+                  disabled={!dirty || saving || chart?.status !== "done"}
+                  loading={saving}
+                >
+                  Сохранить
+                </Button>
+              }
             >
               <GraphEditor
                 resultJson={editedResultJson ?? chart?.result_json}
