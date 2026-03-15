@@ -137,13 +137,23 @@ def _get_storage_dir_from_original(original_path: Path) -> Path:
     """
     Где хранить артефакты.
     1) Если задан STORAGE_DIR в env — используем его
-    2) Иначе берём родителя папки user_<id> (т.е. storage/)
-       original_path обычно: storage/user_<id>/<sha>.<ext>
+    2) Иначе берём корень storage из пути оригинала
+
+    Текущий формат original_path:
+    storage/user_<id>/<chart_id>/<filename>
     """
     env = os.getenv("STORAGE_DIR")
     if env:
         return Path(env).resolve()
-    return original_path.resolve().parent.parent
+
+    resolved = original_path.resolve()
+    if len(resolved.parents) < 3:
+        raise RuntimeError(f"Cannot infer storage dir from original path: {resolved}")
+
+    # parents[0] = .../<chart_id>
+    # parents[1] = .../user_<id>
+    # parents[2] = .../storage
+    return resolved.parents[2]
 
 
 def _first_match(root: Path, pattern: str, must_contain_part: str) -> Optional[Path]:
@@ -157,17 +167,31 @@ def _pick_latest(paths: list[Path]) -> Optional[Path]:
     return max(paths, key=lambda p: p.stat().st_mtime)
 
 
-def _collect_and_copy_artifacts(run_root: Path, chart_id: int, storage_dir: Path) -> dict[str, str]:
+def _collect_and_copy_artifacts(run_root: Path, original_path: Path | str, storage_dir: Path) -> dict[str, str]:
     """
-    Копируем артефакты в storage/charts/<chart_id>/...
+    Копируем артефакты в ту же папку, где лежит оригинал:
+    storage/user_<id>/<chart_id>/...
+
     Возвращаем мапу: {key: "relative/path/from/storage"}
     """
-    dest_base = storage_dir / "charts" / str(chart_id)
+    storage_dir = storage_dir.resolve()
+
+    original_path = Path(original_path)
+    if not original_path.is_absolute():
+        original_path = (storage_dir / original_path).resolve()
+    else:
+        original_path = original_path.resolve()
+
+    dest_base = original_path.parent.resolve()
+
+    if dest_base != storage_dir and storage_dir not in dest_base.parents:
+        raise RuntimeError("Invalid artifact destination path")
+
     dest_base.mkdir(parents=True, exist_ok=True)
 
     artifacts: dict[str, str] = {}
 
-    # Ищем строго внутри run_root/output (там лежат скачанные результаты)
+    # Ищем строго внутри run_root/output
     search_root = run_root / "output"
     if not search_root.exists():
         return artifacts
@@ -192,7 +216,7 @@ def _collect_and_copy_artifacts(run_root: Path, chart_id: int, storage_dir: Path
         shutil.copy2(src, dst)
         artifacts["chartdete_predictions"] = dst.relative_to(storage_dir).as_posix()
 
-    # converted_datapoints/plot.png (есть только если создан)
+    # converted_datapoints/plot.png
     plot_candidates = [p for p in search_root.rglob("plot.png") if "converted_datapoints" in p.parts]
     src = _pick_latest(plot_candidates)
     if src:
@@ -290,9 +314,9 @@ def _run_plextract(chart_id: int, original_path: Path, work_dir: Path) -> Tuple[
     # Запуск через Modal
     extract(input_dir=str(input_dir), output_dir=str(output_dir), backend="modal")
 
-    # Всегда собираем/копируем артефакты в storage/charts/<chart_id>/...
+    # Копируем артефакты в папку задачи рядом с оригиналом
     storage_dir = _get_storage_dir_from_original(original_path)
-    artifacts = _collect_and_copy_artifacts(run_root, chart_id, storage_dir)
+    artifacts = _collect_and_copy_artifacts(run_root, original_path, storage_dir)
 
     # Пытаемся достать data.json и распарсить точки
     try:

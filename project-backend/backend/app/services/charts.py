@@ -49,6 +49,30 @@ def _to_chart_response(chart) -> ChartCreateResponse:
     )
 
 
+def _storage_root() -> Path:
+    root = Path(settings.storage_dir).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _user_root(user_id: int) -> Path:
+    root = (_storage_root() / f"user_{user_id}").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _chart_dir(user_id: int, chart_id: int) -> Path:
+    root = _user_root(user_id)
+    path = (root / str(chart_id)).resolve()
+    if path != root and root not in path.parents:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Invalid storage path",
+        )
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 class ChartService:
     async def upload_and_enqueue(
         self,
@@ -58,7 +82,9 @@ class ChartService:
         upload: UploadFile,
     ) -> ChartCreateResponse:
         original_path: Path | None = None
+        chart_dir: Path | None = None
         wrote_new_file = False
+        chart = None
 
         try:
             max_bytes = _max_upload_bytes()
@@ -84,44 +110,63 @@ class ChartService:
             file_bytes = bytes(buf)
             sha = sha256_bytes(file_bytes)
             filename = _safe_filename(upload.filename or "upload.bin")
-            ext = Path(filename).suffix.lower() or ".bin"
 
-            base_dir = Path(settings.storage_dir).resolve()
-            base_dir.mkdir(parents=True, exist_ok=True)
+            # 1) сначала создаём запись, чтобы получить chart.id
+            chart = chart_crud.create(
+                db,
+                user_id=user_id,
+                original_filename=filename,
+                mime_type=upload.content_type or "application/octet-stream",
+                sha256=sha,
+                original_path="",  # обновим ниже
+                status=ChartStatus.uploaded.value,
+            )
 
-            original_path = (base_dir / f"user_{user_id}" / f"{sha}{ext}").resolve()
-            if original_path != base_dir and base_dir not in original_path.parents:
+            # 2) создаём папку user_N/<chart_id> и кладём туда оригинал
+            chart_dir = _chart_dir(user_id, chart.id)
+            original_path = (chart_dir / filename).resolve()
+
+            user_root = _user_root(user_id)
+            if original_path != user_root and user_root not in original_path.parents:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Invalid storage path",
                 )
 
-            original_path.parent.mkdir(parents=True, exist_ok=True)
+            await run_in_threadpool(original_path.write_bytes, file_bytes)
+            wrote_new_file = True
 
-            if not original_path.exists():
-                await run_in_threadpool(original_path.write_bytes, file_bytes)
-                wrote_new_file = True
-
-            try:
-                chart = chart_crud.create(
-                    db,
-                    user_id=user_id,
-                    original_filename=filename,
-                    mime_type=upload.content_type or "application/octet-stream",
-                    sha256=sha,
-                    original_path=str(original_path),
-                    status=ChartStatus.uploaded.value,
-                )
-            except Exception:
-                db.rollback()
-                if wrote_new_file and original_path is not None:
-                    try:
-                        await run_in_threadpool(original_path.unlink)
-                    except FileNotFoundError:
-                        pass
-                raise
+            # 3) обновляем путь в БД
+            chart.original_path = str(original_path)
+            db.add(chart)
+            db.commit()
+            db.refresh(chart)
 
             return _to_chart_response(chart)
+
+        except Exception:
+            db.rollback()
+
+            if wrote_new_file and original_path is not None:
+                try:
+                    await run_in_threadpool(original_path.unlink)
+                except FileNotFoundError:
+                    pass
+
+            if chart_dir is not None:
+                try:
+                    await run_in_threadpool(chart_dir.rmdir)
+                except OSError:
+                    pass
+
+            if chart is not None:
+                try:
+                    db.delete(chart)
+                    db.commit()
+                except Exception:
+                    db.rollback()
+
+            raise
 
         finally:
             await upload.close()

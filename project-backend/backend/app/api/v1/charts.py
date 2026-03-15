@@ -1,5 +1,6 @@
 from pathlib import Path
 import codecs
+import shutil
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status, Response, Body
 from fastapi.responses import FileResponse
@@ -65,6 +66,16 @@ def _storage_root() -> Path:
     return Path(settings.storage_dir).resolve()
 
 
+def _ensure_in_storage(file_path: Path) -> Path:
+    storage_root = _storage_root()
+    resolved = file_path.resolve()
+
+    if resolved != storage_root and storage_root not in resolved.parents:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    return resolved
+
+
 def _resolve_in_storage(raw_path: str, *, allow_absolute: bool) -> Path:
     if not isinstance(raw_path, str) or not raw_path.strip():
         raise HTTPException(status_code=400, detail="Invalid file path")
@@ -75,14 +86,43 @@ def _resolve_in_storage(raw_path: str, *, allow_absolute: bool) -> Path:
     if p.is_absolute():
         if not allow_absolute:
             raise HTTPException(status_code=400, detail="Invalid file path")
-        file_path = p.resolve()
-    else:
-        file_path = (storage_root / p).resolve()
+        return _ensure_in_storage(p)
 
-    if file_path != storage_root and storage_root not in file_path.parents:
+    return _ensure_in_storage(storage_root / p)
+
+
+def _chart_dir_from_chart(chart: Chart) -> Path:
+    if not isinstance(chart.original_path, str) or not chart.original_path.strip():
+        raise HTTPException(status_code=404, detail="Chart files are missing")
+
+    original_path = _resolve_in_storage(chart.original_path, allow_absolute=True)
+    return _ensure_in_storage(original_path.parent)
+
+
+def _resolve_artifact_path(chart: Chart, raw_path: str) -> Path:
+    """
+    Поддерживает 3 формата путей артефактов:
+    1) абсолютный путь внутри storage_dir
+    2) путь относительно storage_dir
+    3) путь относительно папки конкретной задачи (user_N/<chart_id>/...)
+    """
+    if not isinstance(raw_path, str) or not raw_path.strip():
         raise HTTPException(status_code=400, detail="Invalid file path")
 
-    return file_path
+    p = Path(raw_path)
+
+    if p.is_absolute():
+        return _ensure_in_storage(p)
+
+    # сначала пробуем как путь относительно storage_dir
+    by_storage = _resolve_in_storage(raw_path, allow_absolute=False)
+    if by_storage.exists():
+        return by_storage
+
+    # затем как путь относительно папки задачи
+    chart_dir = _chart_dir_from_chart(chart)
+    by_chart_dir = _ensure_in_storage(chart_dir / raw_path)
+    return by_chart_dir
 
 
 def _parse_panels(
@@ -153,8 +193,8 @@ def get_chart_artifact(
     if not isinstance(artifacts, dict) or key not in artifacts:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    rel = artifacts[key]
-    file_path = _resolve_in_storage(rel, allow_absolute=False)
+    raw_path = artifacts[key]
+    file_path = _resolve_artifact_path(chart, raw_path)
 
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact file missing on disk")
@@ -283,8 +323,17 @@ def delete_chart(
 ):
     chart = _get_user_chart_or_404(db, chart_id, current_user.id)
 
+    chart_dir: Path | None = None
+    try:
+        chart_dir = _chart_dir_from_chart(chart)
+    except HTTPException:
+        chart_dir = None
+
     db.delete(chart)
     db.commit()
+
+    if chart_dir and chart_dir.exists() and chart_dir.is_dir():
+        shutil.rmtree(chart_dir, ignore_errors=True)
 
     return Response(status_code=204)
 
