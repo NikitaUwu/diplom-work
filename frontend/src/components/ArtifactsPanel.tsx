@@ -1,4 +1,4 @@
-import { artifactUrl } from "../api/client";
+import { chartFileUrl } from "../api/client";
 
 type ArtifactKey =
   | "lineformer_prediction"
@@ -25,7 +25,7 @@ const ARTIFACT_KEYS: ArtifactKey[] = [
 const META: Record<ArtifactKey, { title: string; subtitle: string }> = {
   lineformer_prediction: {
     title: "LineFormer",
-    subtitle: "Prediction (извлечённая линия)",
+    subtitle: "Prediction (извлеченная линия)",
   },
   chartdete_predictions: {
     title: "ChartDete",
@@ -108,7 +108,7 @@ export default function ArtifactsPanel({ chartId, resultJson }: Props) {
           key={k}
           title={META[k].title}
           subtitle={META[k].subtitle}
-          src={artifactUrl(chartId, k)}
+          src={chartFileUrl(chartId, k)}
         />
       ))}
     </div>

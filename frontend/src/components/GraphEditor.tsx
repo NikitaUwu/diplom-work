@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { previewChartResult } from "../api/client";
 import Button from "./ui/Button";
 import Alert from "./ui/Alert";
-import Card from "./ui/Card";
 
 type Point = { x: number; y: number };
 
 type Series = {
   id: string;
   name: string;
-  interp: "linear" | "poly" | "lsq";
   points: Point[];
+  curvePoints: Point[];
 };
 
 type Panel = {
@@ -23,6 +23,29 @@ type EditorResultJson = {
   [k: string]: any;
 };
 
+type OverlayPlotArea = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+type OverlayAxisSample = {
+  value: number;
+  screen: number;
+};
+
+type EditorOverlayCalibration = {
+  artifactKey: string;
+  plotArea: OverlayPlotArea;
+  xDomain: [number, number];
+  yDomain: [number, number];
+  xTicks: number[];
+  yTicks: number[];
+  xAxisSamples: OverlayAxisSample[];
+  yAxisSamples: OverlayAxisSample[];
+};
+
 type View = {
   domainX: [number, number];
   domainY: [number, number];
@@ -33,20 +56,28 @@ type AxisWarp = {
   screenKnots: number[]; // 0..1
 };
 
+type BackdropOffset = {
+  x: number;
+  y: number;
+};
+
 type Patch =
   | { type: "move-point"; seriesId: string; index: number; before: Point; after: Point }
   | { type: "add-point"; seriesId: string; index: number; point: Point }
   | { type: "delete-point"; seriesId: string; index: number; point: Point }
   | { type: "add-series"; index: number; series: Series }
   | { type: "delete-series"; index: number; series: Series }
-  | { type: "set-interp"; seriesId: string; before: Series["interp"]; after: Series["interp"] }
   | { type: "rename-series"; seriesId: string; before: string; after: string }
   | { type: "set-domain"; before: View; after: View }
   | { type: "set-warp"; axis: "x" | "y"; before: AxisWarp | null; after: AxisWarp | null };
 
 type Props = {
+  chartId: number;
+  backdropImageUrl?: string;
+  showBackdrop?: boolean;
   resultJson: unknown;
   onResultJsonChange?: (next: any) => void;
+  uiMode?: "full" | "compact";
 };
 
 const MAX_SERIES_NAME = 60;
@@ -54,13 +85,22 @@ const MAX_SERIES_LABEL = 26;
 
 const ZOOM_STEP = 1.1;
 const MIN_SPAN = 1e-9;
-
-const LSQ_MAX_DEG = 5;
-
+const DEFAULT_EDITOR_BOX = { w: 900, h: 420 };
+const EDITOR_MARGIN = { l: 56, r: 18, t: 16, b: 44 } as const;
+const DEFAULT_EDITOR_PLOT_SIZE = {
+  w: DEFAULT_EDITOR_BOX.w - EDITOR_MARGIN.l - EDITOR_MARGIN.r,
+  h: DEFAULT_EDITOR_BOX.h - EDITOR_MARGIN.t - EDITOR_MARGIN.b,
+} as const;
+const DEFAULT_EDITOR_PLOT_HEIGHT = DEFAULT_EDITOR_PLOT_SIZE.h;
+const MIN_EDITOR_WINDOW_SCALE = 0.1;
+const EDITOR_WINDOW_SCALE_STEP = 0.05;
+const MIN_BACKDROP_SCALE = 0.25;
+const MAX_BACKDROP_SCALE = 3;
+const BACKDROP_SCALE_STEP = 0.05;
 const COLOR_OPTIONS = [
   {
     id: "black",
-    label: "Чёрный",
+    label: "Черный",
     path: "stroke-black dark:stroke-slate-100",
     dot: "bg-black dark:bg-slate-100",
     pointFill: "fill-black dark:fill-slate-100",
@@ -74,7 +114,7 @@ const COLOR_OPTIONS = [
   },
   {
     id: "green",
-    label: "Зелёный",
+    label: "Зеленый",
     path: "stroke-green-600 dark:stroke-green-400",
     dot: "bg-green-600",
     pointFill: "fill-green-600",
@@ -105,7 +145,7 @@ const COLOR_OPTIONS = [
 
 function ellipsis(s: string, max: number) {
   if (s.length <= max) return s;
-  return s.slice(0, Math.max(0, max - 1)) + "…";
+  return s.slice(0, Math.max(0, max - 1)) + "...";
 }
 
 function uid(prefix = "s") {
@@ -119,6 +159,40 @@ function isObj(v: unknown): v is Record<string, any> {
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : null;
+}
+
+function parseOverlayAxisSamples(value: unknown): OverlayAxisSample[] {
+  if (!Array.isArray(value)) return [];
+
+  const parsed = value
+    .map((item) => {
+      if (!isObj(item)) return null;
+      const rawValue = toFiniteNumber((item as Record<string, unknown>).value);
+      const rawScreen = toFiniteNumber((item as Record<string, unknown>).screen);
+      if (rawValue === null || rawScreen === null) return null;
+      return { value: rawValue, screen: clamp(rawScreen, 0, 1) };
+    })
+    .filter(Boolean) as OverlayAxisSample[];
+
+  parsed.sort((a, b) => a.value - b.value || a.screen - b.screen);
+
+  const normalized: OverlayAxisSample[] = [];
+  for (const sample of parsed) {
+    const prev = normalized[normalized.length - 1];
+    if (prev && Math.abs(prev.value - sample.value) <= 1e-9) {
+      normalized[normalized.length - 1] = sample;
+      continue;
+    }
+    if (prev && sample.screen <= prev.screen + 1e-4) continue;
+    normalized.push(sample);
+  }
+
+  return normalized;
 }
 
 function niceTicks(min: number, max: number, count = 6): number[] {
@@ -138,18 +212,21 @@ function niceTicks(min: number, max: number, count = 6): number[] {
   return out.filter((t) => t >= min - eps && t <= max + eps);
 }
 
-// подписи осей/tooltip — до сотых
+// Подписи осей и tooltip показываем с точностью до сотых.
 function formatTick(v: number) {
-  if (!Number.isFinite(v)) return "—";
+  if (!Number.isFinite(v)) return "-";
   const r = Math.round(v * 100) / 100;
   return r.toFixed(2).replace(/\.?0+$/, "");
 }
 
-// коэффициенты формулы — до 6 знаков
-function formatCoef(v: number) {
-  if (!Number.isFinite(v)) return "0";
-  const r = Math.round(v * 1e6) / 1e6;
-  return r.toFixed(6).replace(/\.?0+$/, "");
+// Нормализуем список точек из формата [[x, y], ...].
+function parsePointList(value: unknown): Point[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((item: any) => Array.isArray(item) && item.length >= 2)
+    .map((item: any) => ({ x: Number(item[0]), y: Number(item[1]) }))
+    .filter((point: Point) => Number.isFinite(point.x) && Number.isFinite(point.y));
 }
 
 function parsePanels(resultJson: unknown): Panel[] {
@@ -158,39 +235,131 @@ function parsePanels(resultJson: unknown): Panel[] {
   const panelsRaw = (resultJson as any).panels;
   if (!Array.isArray(panelsRaw) || panelsRaw.length === 0) return [{ series: [] }];
 
-  return panelsRaw.map((p: any, pi: number) => {
-    const seriesRaw = Array.isArray(p?.series) ? p.series : [];
-    const series: Series[] = seriesRaw.map((s: any, si: number) => {
-      const ptsRaw = Array.isArray(s?.points) ? s.points : [];
-      const pts: Point[] = ptsRaw
-        .filter((t: any) => Array.isArray(t) && t.length >= 2)
-        .map((t: any) => ({ x: Number(t[0]), y: Number(t[1]) }))
-        .filter((pt: Point) => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+  return panelsRaw.map((panelRaw: any, panelIndex: number) => {
+    const seriesRaw = Array.isArray(panelRaw?.series) ? panelRaw.series : [];
+    const series: Series[] = seriesRaw.map((seriesItem: any, seriesIndex: number) => ({
+      id: String(seriesItem?.id ?? uid(`s${panelIndex}_${seriesIndex}`)),
+      name: String(seriesItem?.name ?? `Кривая ${seriesIndex + 1}`),
+      points: parsePointList(seriesItem?.points),
+      curvePoints: parsePointList(seriesItem?.curve_points),
+    }));
 
-      const interp: Series["interp"] =
-        s?.interp === "poly" ? "poly" : s?.interp === "lsq" || s?.interp === "lagrange" ? "lsq" : "linear";
+    return { id: panelRaw?.id != null ? String(panelRaw.id) : undefined, series };
+  });
+}
 
-      return {
-        id: String(s?.id ?? uid(`s${pi}_${si}`)),
-        name: String(s?.name ?? `Кривая ${si + 1}`),
-        interp,
-        points: pts,
-      };
-    });
+function parseEditorOverlayCalibration(resultJson: unknown): EditorOverlayCalibration | null {
+  if (!isObj(resultJson)) return null;
 
-    return { id: p?.id != null ? String(p.id) : undefined, series };
+  const rawMeta = isObj((resultJson as any).ml_meta) ? ((resultJson as any).ml_meta as Record<string, any>) : null;
+  const rawOverlay = rawMeta && isObj(rawMeta.editor_overlay) ? (rawMeta.editor_overlay as Record<string, any>) : null;
+  if (!rawOverlay) return null;
+
+  const rawPlotArea = isObj(rawOverlay.plot_area) ? (rawOverlay.plot_area as Record<string, any>) : null;
+  if (!rawPlotArea) return null;
+
+  const left = toFiniteNumber(rawPlotArea.left);
+  const top = toFiniteNumber(rawPlotArea.top);
+  const right = toFiniteNumber(rawPlotArea.right);
+  const bottom = toFiniteNumber(rawPlotArea.bottom);
+  if (left === null || top === null || right === null || bottom === null || right <= left || bottom <= top) {
+    return null;
+  }
+
+  const xDomainRaw = Array.isArray(rawOverlay.x_domain) ? rawOverlay.x_domain : null;
+  const yDomainRaw = Array.isArray(rawOverlay.y_domain) ? rawOverlay.y_domain : null;
+  if (!xDomainRaw || xDomainRaw.length < 2 || !yDomainRaw || yDomainRaw.length < 2) {
+    return null;
+  }
+
+  const x0 = toFiniteNumber(xDomainRaw[0]);
+  const x1 = toFiniteNumber(xDomainRaw[1]);
+  const y0 = toFiniteNumber(yDomainRaw[0]);
+  const y1 = toFiniteNumber(yDomainRaw[1]);
+  if (x0 === null || x1 === null || y0 === null || y1 === null || x0 === x1 || y0 === y1) {
+    return null;
+  }
+
+  const xTicks = Array.isArray(rawOverlay.x_ticks)
+    ? Array.from(new Set(rawOverlay.x_ticks.map((item) => Number(item)).filter(Number.isFinite)))
+    : [];
+  const yTicks = Array.isArray(rawOverlay.y_ticks)
+    ? Array.from(new Set(rawOverlay.y_ticks.map((item) => Number(item)).filter(Number.isFinite)))
+    : [];
+  const xAxisSamples = parseOverlayAxisSamples(rawOverlay.x_axis_samples);
+  const yAxisSamples = parseOverlayAxisSamples(rawOverlay.y_axis_samples);
+
+  return {
+    artifactKey: typeof rawOverlay.artifact_key === "string" && rawOverlay.artifact_key.trim() ? rawOverlay.artifact_key : "original",
+    plotArea: { left, top, right, bottom },
+    xDomain: [x0, x1],
+    yDomain: [Math.min(y0, y1), Math.max(y0, y1)],
+    xTicks: xAxisSamples.length ? xAxisSamples.map((sample) => sample.value) : xTicks,
+    yTicks: yAxisSamples.length ? yAxisSamples.map((sample) => sample.value) : yTicks,
+    xAxisSamples,
+    yAxisSamples,
+  };
+}
+
+function defaultViewFromPanels(panels: Panel[], calibration: EditorOverlayCalibration | null): View {
+  if (calibration) {
+    return {
+      domainX: [...calibration.xDomain] as [number, number],
+      domainY: [...calibration.yDomain] as [number, number],
+    };
+  }
+
+  const all = panels.flatMap((panel) => panel.series.flatMap((series) => series.points));
+  const xs = all.map((point) => point.x);
+  const ys = all.map((point) => point.y);
+  const x0 = xs.length ? Math.min(...xs) : 0;
+  const x1 = xs.length ? Math.max(...xs) : 1;
+  const y0 = ys.length ? Math.min(...ys) : 0;
+  const y1 = ys.length ? Math.max(...ys) : 1;
+  const padX = (x1 - x0 || 1) * 0.05;
+  const padY = (y1 - y0 || 1) * 0.05;
+  return { domainX: [x0 - padX, x1 + padX], domainY: [y0 - padY, y1 + padY] };
+}
+
+function stripCurvePreview(panels: Panel[]): Panel[] {
+  return panels.map((panel) => ({
+    ...panel,
+    series: panel.series.map((series) => ({
+      ...series,
+      curvePoints: [],
+    })),
+  }));
+}
+
+function hasCurvePreview(panels: Panel[]): boolean {
+  return panels.every((panel) =>
+    panel.series.every((series) => series.points.length === 0 || series.curvePoints.length > 0)
+  );
+}
+
+function mergeCurvePreview(current: Panel[], preview: Panel[]): Panel[] {
+  return current.map((panel, panelIndex) => {
+    const previewPanel = preview[panelIndex];
+    const previewSeries = new Map((previewPanel?.series ?? []).map((series) => [series.id, series]));
+
+    return {
+      ...panel,
+      series: panel.series.map((series) => ({
+        ...series,
+        curvePoints: previewSeries.get(series.id)?.curvePoints ?? series.curvePoints,
+      })),
+    };
   });
 }
 
 function buildNextResultJson(base: unknown, panels: Panel[]): any {
   const out: EditorResultJson = isObj(base) ? { ...(base as any) } : {};
-  out.panels = panels.map((p) => ({
-    ...(p.id != null ? { id: p.id } : {}),
-    series: p.series.map((s) => ({
-      id: s.id,
-      name: s.name,
-      interp: s.interp,
-      points: s.points.map((pt) => [pt.x, pt.y]),
+  out.panels = panels.map((panel) => ({
+    ...(panel.id != null ? { id: panel.id } : {}),
+    series: panel.series.map((series) => ({
+      id: series.id,
+      name: series.name,
+      points: series.points.map((point) => [point.x, point.y]),
     })),
   }));
   return out;
@@ -300,6 +469,29 @@ function buildWarpFromTicks(domain: [number, number], count = 6): AxisWarp {
   return normalizeWarp({ dataKnots, screenKnots });
 }
 
+function buildWarpFromOverlaySamples(domain: [number, number], samples: OverlayAxisSample[]): AxisWarp | null {
+  if (samples.length < 2) return null;
+
+  const [d0, d1] = domain;
+  if (!Number.isFinite(d0) || !Number.isFinite(d1) || Math.abs(d1 - d0) <= MIN_SPAN) return null;
+
+  const dataKnots = [d0];
+  const screenKnots = [0];
+
+  for (const sample of samples) {
+    if (sample.value <= d0 + MIN_SPAN || sample.value >= d1 - MIN_SPAN) continue;
+    const prevScreen = screenKnots[screenKnots.length - 1];
+    if (sample.screen <= prevScreen + 1e-4 || sample.screen >= 1 - 1e-4) continue;
+    dataKnots.push(sample.value);
+    screenKnots.push(sample.screen);
+  }
+
+  dataKnots.push(d1);
+  screenKnots.push(1);
+
+  return dataKnots.length >= 2 ? normalizeWarp({ dataKnots, screenKnots }) : null;
+}
+
 function remapDataKnots(oldKnots: number[], oldDomain: [number, number], newDomain: [number, number]) {
   const [a0, a1] = oldDomain;
   const [b0, b1] = newDomain;
@@ -314,226 +506,6 @@ function remapDataKnots(oldKnots: number[], oldDomain: [number, number], newDoma
   });
 }
 
-// ===== Cubic spline =====
-function splineCoefficients(points: Point[]) {
-  if (points.length < 3) return null;
-
-  const pts = points.slice().sort((a, b) => a.x - b.x);
-  const xs = pts.map((p) => p.x);
-  const ys = pts.map((p) => p.y);
-
-  for (let i = 1; i < xs.length; i++) if (xs[i] === xs[i - 1]) return null;
-
-  const n = xs.length;
-  const h: number[] = new Array(n - 1);
-  for (let i = 0; i < n - 1; i++) h[i] = xs[i + 1] - xs[i];
-  for (let i = 0; i < n - 1; i++) if (h[i] === 0) return null;
-
-  const a: number[] = new Array(n).fill(0);
-  const b: number[] = new Array(n).fill(0);
-  const c: number[] = new Array(n).fill(0);
-  const d: number[] = new Array(n).fill(0);
-
-  b[0] = 1;
-  b[n - 1] = 1;
-
-  for (let i = 1; i < n - 1; i++) {
-    a[i] = h[i - 1];
-    b[i] = 2 * (h[i - 1] + h[i]);
-    c[i] = h[i];
-    d[i] = 3 * ((ys[i + 1] - ys[i]) / h[i] - (ys[i] - ys[i - 1]) / h[i - 1]);
-  }
-
-  for (let i = 1; i < n; i++) {
-    const w = a[i] / b[i - 1];
-    b[i] = b[i] - w * c[i - 1];
-    d[i] = d[i] - w * d[i - 1];
-  }
-
-  const cc: number[] = new Array(n).fill(0);
-  cc[n - 1] = d[n - 1] / b[n - 1];
-  for (let i = n - 2; i >= 0; i--) cc[i] = (d[i] - c[i] * cc[i + 1]) / b[i];
-
-  const bb: number[] = new Array(n - 1);
-  const dd: number[] = new Array(n - 1);
-  const aa: number[] = ys.slice(0, n - 1);
-
-  for (let i = 0; i < n - 1; i++) {
-    bb[i] = (ys[i + 1] - ys[i]) / h[i] - (h[i] * (2 * cc[i] + cc[i + 1])) / 3;
-    dd[i] = (cc[i + 1] - cc[i]) / (3 * h[i]);
-  }
-
-  const segs = [];
-  for (let i = 0; i < n - 1; i++) {
-    segs.push({ x0: xs[i], x1: xs[i + 1], a: aa[i], b: bb[i], c: cc[i], d: dd[i] });
-  }
-  return { pts, segs };
-}
-
-function splineSample(points: Point[], samples = 250): Point[] {
-  const coeff = splineCoefficients(points);
-  if (!coeff) return points;
-
-  const pts = coeff.pts;
-  const segs = coeff.segs;
-
-  const xMin = pts[0].x;
-  const xMax = pts[pts.length - 1].x;
-  const out: Point[] = [];
-  const N = Math.max(50, samples);
-
-  for (let k = 0; k <= N; k++) {
-    const x = xMin + ((xMax - xMin) * k) / N;
-
-    let si = segs.length - 1;
-    for (let j = 0; j < segs.length; j++) {
-      if (x <= segs[j].x1) {
-        si = j;
-        break;
-      }
-    }
-
-    const s = segs[si];
-    const dx = x - s.x0;
-    const y = s.a + s.b * dx + s.c * dx * dx + s.d * dx * dx * dx;
-    out.push({ x, y });
-  }
-  return out;
-}
-
-// ===== LSQ fit =====
-type PolyFitResult = { degree: number; xMin: number; xMax: number; aX: number[] };
-
-function solveLinearSystem(A: number[][], b: number[]) {
-  const n = b.length;
-  const M = A.map((row, i) => [...row, b[i]]);
-
-  for (let col = 0; col < n; col++) {
-    let piv = col;
-    for (let r = col + 1; r < n; r++) {
-      if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
-    }
-    if (Math.abs(M[piv][col]) < 1e-12) return null;
-
-    if (piv !== col) {
-      const tmp = M[col];
-      M[col] = M[piv];
-      M[piv] = tmp;
-    }
-
-    const div = M[col][col];
-    for (let c = col; c <= n; c++) M[col][c] /= div;
-
-    for (let r = 0; r < n; r++) {
-      if (r === col) continue;
-      const f = M[r][col];
-      if (Math.abs(f) < 1e-12) continue;
-      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
-    }
-  }
-
-  return M.map((row) => row[n]);
-}
-
-function polyMul(a: number[], b: number[]) {
-  const out = new Array(a.length + b.length - 1).fill(0);
-  for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) out[i + j] += a[i] * b[j];
-  return out;
-}
-function polyScale(a: number[], k: number) {
-  return a.map((v) => v * k);
-}
-function polyAdd(a: number[], b: number[]) {
-  const n = Math.max(a.length, b.length);
-  const out = new Array(n).fill(0);
-  for (let i = 0; i < n; i++) out[i] = (a[i] ?? 0) + (b[i] ?? 0);
-  return out;
-}
-
-function lsqFit(points: Point[], degreeWanted: number): PolyFitResult | null {
-  const pts = points.slice().filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-  if (pts.length < 2) return null;
-
-  const xs = pts.map((p) => p.x);
-  const ys = pts.map((p) => p.y);
-
-  const xMin = Math.min(...xs);
-  const xMax = Math.max(...xs);
-  const span = xMax - xMin;
-  if (!Number.isFinite(span) || span === 0) return null;
-
-  const deg = clamp(degreeWanted, 1, Math.min(LSQ_MAX_DEG, pts.length - 1));
-  const m = deg + 1;
-
-  const alpha = 2 / span;
-  const beta = -(xMin + xMax) / span; // t = alpha*x + beta
-
-  const ATA: number[][] = Array.from({ length: m }, () => new Array(m).fill(0));
-  const ATy: number[] = new Array(m).fill(0);
-
-  for (let i = 0; i < pts.length; i++) {
-    const t = alpha * xs[i] + beta;
-    const pows = new Array(m).fill(1);
-    for (let k = 1; k < m; k++) pows[k] = pows[k - 1] * t;
-
-    for (let r = 0; r < m; r++) {
-      ATy[r] += pows[r] * ys[i];
-      for (let c = 0; c < m; c++) ATA[r][c] += pows[r] * pows[c];
-    }
-  }
-
-  const cT = solveLinearSystem(ATA, ATy);
-  if (!cT) return null;
-
-  const tPoly = [beta, alpha];
-  let powPoly: number[] = [1];
-  let aX: number[] = [0];
-
-  for (let k = 0; k < cT.length; k++) {
-    if (k === 0) powPoly = [1];
-    else powPoly = polyMul(powPoly, tPoly);
-    aX = polyAdd(aX, polyScale(powPoly, cT[k]));
-  }
-
-  return { degree: deg, xMin, xMax, aX };
-}
-
-function evalPolyCoeffs(a: number[], x: number) {
-  let y = 0;
-  for (let i = a.length - 1; i >= 0; i--) y = y * x + a[i];
-  return y;
-}
-
-function polyFormula(a: number[]) {
-  const eps = 1e-10;
-  const terms: string[] = [];
-  for (let k = a.length - 1; k >= 0; k--) {
-    const c = a[k] ?? 0;
-    if (Math.abs(c) < eps) continue;
-
-    const sign = c < 0 ? "−" : terms.length ? "+" : "";
-    const abs = Math.abs(c);
-
-    let coefStr = formatCoef(abs);
-    if (k > 0 && Math.abs(abs - 1) < 1e-10) coefStr = "";
-
-    const xPart = k === 0 ? "" : k === 1 ? "x" : `x^${k}`;
-
-    if (k === 0) terms.push(`${sign}${coefStr}`);
-    else if (!coefStr) terms.push(`${sign}${xPart}`);
-    else terms.push(`${sign}${coefStr}·${xPart}`);
-  }
-
-  if (!terms.length) return "y = 0";
-  return `y = ${terms.join(" ")}`.replace(/^y = \+ /, "y = ");
-}
-
-function interpLabel(i: Series["interp"]) {
-  if (i === "linear") return "Линии";
-  if (i === "poly") return "Сплайн";
-  return "МНК";
-}
-
 function defaultColorIndex(prefer: number, used: Set<number>) {
   if (!used.has(prefer)) return prefer;
   for (let i = 0; i < COLOR_OPTIONS.length; i++) {
@@ -542,8 +514,18 @@ function defaultColorIndex(prefer: number, used: Set<number>) {
   return prefer;
 }
 
-export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
+export default function GraphEditor({
+  chartId,
+  backdropImageUrl,
+  showBackdrop = false,
+  resultJson,
+  onResultJsonChange,
+  uiMode = "full",
+}: Props) {
+  const calibration = useMemo(() => parseEditorOverlayCalibration(resultJson), [resultJson]);
+  const overlayLocked = calibration !== null;
   const initialPanels = useMemo(() => parsePanels(resultJson), [resultJson]);
+  const compactMode = uiMode === "compact";
 
   const [panels, setPanels] = useState<Panel[]>(() => initialPanels);
   const [activeSeriesId, setActiveSeriesId] = useState<string | null>(() => {
@@ -557,18 +539,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
 
   const [selection, setSelection] = useState<{ seriesId: string; index: number } | null>(null);
 
-  const [view, setView] = useState<View>(() => {
-    const all = initialPanels.flatMap((p) => p.series.flatMap((s) => s.points));
-    const xs = all.map((p) => p.x);
-    const ys = all.map((p) => p.y);
-    const x0 = xs.length ? Math.min(...xs) : 0;
-    const x1 = xs.length ? Math.max(...xs) : 1;
-    const y0 = ys.length ? Math.min(...ys) : 0;
-    const y1 = ys.length ? Math.max(...ys) : 1;
-    const padX = (x1 - x0 || 1) * 0.05;
-    const padY = (y1 - y0 || 1) * 0.05;
-    return { domainX: [x0 - padX, x1 + padX], domainY: [y0 - padY, y1 + padY] };
-  });
+  const [view, setView] = useState<View>(() => defaultViewFromPanels(initialPanels, calibration));
 
   const [warpX, setWarpX] = useState<AxisWarp | null>(null);
   const [warpY, setWarpY] = useState<AxisWarp | null>(null);
@@ -581,8 +552,6 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     null
   );
 
-  const [showPoly, setShowPoly] = useState(true);
-
   // show/hide curves
   const [visibleIds, setVisibleIds] = useState<Set<string>>(() => new Set());
   const [visOpen, setVisOpen] = useState(false);
@@ -594,8 +563,12 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
   const nameBeforeRef = useRef<string | null>(null);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const [bbox, setBbox] = useState<{ w: number; h: number }>({ w: 900, h: 420 });
-
+  const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null);
+  const [editorWidthScale, setEditorWidthScale] = useState(1);
+  const [editorHeightScale, setEditorHeightScale] = useState(1);
+  const [backdropMoveMode, setBackdropMoveMode] = useState(false);
+  const [backdropScale, setBackdropScale] = useState(1);
+  const [backdropOffset, setBackdropOffset] = useState<BackdropOffset>({ x: 0, y: 0 });
   const prevDomainXRef = useRef<[number, number]>(view.domainX);
   const prevDomainYRef = useRef<[number, number]>(view.domainY);
 
@@ -612,13 +585,60 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
       startY: number;
     }
   >(null);
+  const backdropDragRef = useRef<
+    null | {
+      pointerId: number;
+      startClientX: number;
+      startClientY: number;
+      startOffset: BackdropOffset;
+    }
+  >(null);
 
   const viewRef = useRef(view);
   useEffect(() => {
     viewRef.current = view;
   }, [view]);
 
+  useEffect(() => {
+    if (!backdropImageUrl) {
+      setImageSize(null);
+      return;
+    }
+
+    let cancelled = false;
+    const image = new window.Image();
+
+    image.onload = () => {
+      if (cancelled || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+      setImageSize({ w: image.naturalWidth, h: image.naturalHeight });
+    };
+
+    image.onerror = () => {
+      if (cancelled) return;
+      setImageSize(null);
+    };
+
+    image.src = backdropImageUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backdropImageUrl]);
+
+
+  useEffect(() => {
+    setBackdropMoveMode(false);
+    setBackdropScale(1);
+    setBackdropOffset({ x: 0, y: 0 });
+  }, [chartId, backdropImageUrl]);
+
+  useEffect(() => {
+    if (showBackdrop) return;
+    setBackdropMoveMode(false);
+  }, [showBackdrop]);
   const zoomTxnRef = useRef<{ before: View; timer: number | null } | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
+  const previewRequestRef = useRef(0);
 
   const panel0 = panels[0] ?? { series: [] };
   const seriesList = panel0.series;
@@ -632,6 +652,66 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     () => seriesList.find((s) => s.id === activeSeriesId) ?? null,
     [seriesList, activeSeriesId]
   );
+  const canMoveBackdrop = showBackdrop && Boolean(backdropImageUrl) && !overlayLocked;
+  const hasBackdropTransform =
+    Math.abs(backdropOffset.x) > 0.5 || Math.abs(backdropOffset.y) > 0.5 || Math.abs(backdropScale - 1) > 1e-6;
+
+  useEffect(() => {
+    if (!overlayLocked || !calibration) return;
+
+    setView({
+      domainX: [...calibration.xDomain] as [number, number],
+      domainY: [...calibration.yDomain] as [number, number],
+    });
+    setWarpX(buildWarpFromOverlaySamples(calibration.xDomain, calibration.xAxisSamples));
+    setWarpY(buildWarpFromOverlaySamples(calibration.yDomain, calibration.yAxisSamples));
+    setGridDragAxis(null);
+    setPanMode(false);
+    setBackdropMoveMode(false);
+    setBackdropOffset({ x: 0, y: 0 });
+    setBackdropScale(1);
+  }, [
+    calibration,
+    overlayLocked,
+  ]);
+
+  const requestServerPreview = (nextPanels: Panel[], delayMs = 120) => {
+    if (previewTimerRef.current) {
+      window.clearTimeout(previewTimerRef.current);
+    }
+
+    const requestId = previewRequestRef.current + 1;
+    previewRequestRef.current = requestId;
+
+    previewTimerRef.current = window.setTimeout(async () => {
+      try {
+        const preview = await previewChartResult(chartId, buildNextResultJson(resultJson, nextPanels));
+        if (previewRequestRef.current !== requestId) return;
+
+        const previewPanels = parsePanels(preview.result_json);
+        setPanels((current) => mergeCurvePreview(current, previewPanels));
+        setErr(null);
+      } catch (e: any) {
+        if (previewRequestRef.current !== requestId) return;
+        setErr(e?.message ?? "Ошибка обновления сплайна");
+      }
+    }, delayMs);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (previewTimerRef.current) {
+        window.clearTimeout(previewTimerRef.current);
+      }
+      previewRequestRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!seriesList.length || hasCurvePreview(panels)) return;
+    requestServerPreview(stripCurvePreview(panels), 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ===== Fix BUG #1: do NOT re-add hidden series on any edit =====
   const prevIdsRef = useRef<string[]>([]);
@@ -728,23 +808,142 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     return () => window.removeEventListener("mousedown", onDown);
   }, [visOpen]);
 
-  // polynomial card for LSQ
-  const polyInfo = useMemo(() => {
-    if (!activeSeries || activeSeries.interp !== "lsq") return null;
-    const pts = activeSeries.points.slice().sort((a, b) => a.x - b.x);
-    const degWanted = Math.min(LSQ_MAX_DEG, Math.max(1, pts.length - 1));
-    const fit = lsqFit(pts, degWanted);
-    if (!fit) return { err: "Невозможно выполнить МНК (нужны хотя бы 2 разные точки по X)." as const };
-    return { degree: fit.degree, formula: polyFormula(fit.aX) };
-  }, [activeSeries]);
+  const calibrationPlotSize = useMemo(() => {
+    if (!calibration) return null;
+    return {
+      w: Math.max(1, calibration.plotArea.right - calibration.plotArea.left),
+      h: Math.max(1, calibration.plotArea.bottom - calibration.plotArea.top),
+    };
+  }, [calibration]);
+
+  const calibrationImageScale = useMemo(() => {
+    if (!calibrationPlotSize) return null;
+    return DEFAULT_EDITOR_PLOT_HEIGHT / Math.max(calibrationPlotSize.h, 1);
+  }, [calibrationPlotSize]);
+
+  const basePlotSize = useMemo(() => {
+    if (calibrationPlotSize) {
+      return {
+        w: Math.max(50, Math.round(calibrationPlotSize.w * Math.max(calibrationImageScale ?? 1, 1e-6))),
+        h: Math.max(50, Math.round(calibrationPlotSize.h * Math.max(calibrationImageScale ?? 1, 1e-6))),
+      };
+    }
+
+    if (!imageSize) return DEFAULT_EDITOR_PLOT_SIZE;
+    const fitScale = DEFAULT_EDITOR_PLOT_HEIGHT / Math.max(imageSize.h, 1);
+    return {
+      w: Math.max(50, Math.round(imageSize.w * fitScale)),
+      h: Math.max(50, Math.round(imageSize.h * fitScale)),
+    };
+  }, [calibrationImageScale, calibrationPlotSize, imageSize]);
+
+  const contentBox = useMemo(() => {
+    if (overlayLocked && imageSize && calibrationImageScale) {
+      return {
+        w: Math.max(120, Math.round(imageSize.w * calibrationImageScale)),
+        h: Math.max(120, Math.round(imageSize.h * calibrationImageScale)),
+      };
+    }
+
+    const plotWidthScale = calibration
+      ? Math.max(MIN_BACKDROP_SCALE, backdropScale)
+      : Math.max(MIN_EDITOR_WINDOW_SCALE, editorWidthScale);
+    const plotHeightScale = calibration
+      ? Math.max(MIN_BACKDROP_SCALE, backdropScale)
+      : Math.max(MIN_EDITOR_WINDOW_SCALE, editorHeightScale);
+
+    const plotWidth = Math.max(50, Math.round(basePlotSize.w * plotWidthScale));
+    const plotHeight = Math.max(50, Math.round(basePlotSize.h * plotHeightScale));
+
+    return {
+      w: plotWidth + EDITOR_MARGIN.l + EDITOR_MARGIN.r,
+      h: plotHeight + EDITOR_MARGIN.t + EDITOR_MARGIN.b,
+    };
+  }, [backdropScale, basePlotSize.h, basePlotSize.w, calibration, calibrationImageScale, editorHeightScale, editorWidthScale, imageSize, overlayLocked]);
+
+  const windowBox = useMemo(() => {
+    if (!calibration) return contentBox;
+
+    return {
+      w: Math.max(240, Math.round(contentBox.w * Math.max(MIN_EDITOR_WINDOW_SCALE, editorWidthScale))),
+      h: Math.max(220, Math.round(contentBox.h * Math.max(MIN_EDITOR_WINDOW_SCALE, editorHeightScale))),
+    };
+  }, [calibration, contentBox, editorHeightScale, editorWidthScale]);
 
   const layout = useMemo(() => {
-    const m = { l: 56, r: 18, t: 16, b: 44 };
-    const pw = Math.max(50, bbox.w - m.l - m.r);
-    const ph = Math.max(50, bbox.h - m.t - m.b);
-    return { ...m, pw, ph };
-  }, [bbox]);
+    if (overlayLocked && calibration && calibrationPlotSize && calibrationImageScale) {
+      const left = calibration.plotArea.left * calibrationImageScale;
+      const top = calibration.plotArea.top * calibrationImageScale;
+      const pw = calibrationPlotSize.w * calibrationImageScale;
+      const ph = calibrationPlotSize.h * calibrationImageScale;
 
+      return {
+        l: left,
+        r: Math.max(0, contentBox.w - left - pw),
+        t: top,
+        b: Math.max(0, contentBox.h - top - ph),
+        pw,
+        ph,
+      };
+    }
+
+    const pw = Math.max(50, contentBox.w - EDITOR_MARGIN.l - EDITOR_MARGIN.r);
+    const ph = Math.max(50, contentBox.h - EDITOR_MARGIN.t - EDITOR_MARGIN.b);
+    return { ...EDITOR_MARGIN, pw, ph };
+  }, [calibration, calibrationImageScale, calibrationPlotSize, contentBox, overlayLocked]);
+
+  const backdropFrame = useMemo(() => {
+    if (!imageSize) return null;
+
+    if (overlayLocked && calibrationImageScale) {
+      return {
+        width: Math.max(1, imageSize.w * calibrationImageScale),
+        height: Math.max(1, imageSize.h * calibrationImageScale),
+        x: 0,
+        y: 0,
+      };
+    }
+
+    const width = Math.max(1, basePlotSize.w * backdropScale);
+    const height = Math.max(1, basePlotSize.h * backdropScale);
+    return {
+      width,
+      height,
+      x: layout.l - (width - layout.pw) / 2 + backdropOffset.x,
+      y: layout.t - (height - layout.ph) / 2 + backdropOffset.y,
+    };
+  }, [
+    backdropOffset.x,
+    backdropOffset.y,
+    backdropScale,
+    basePlotSize.h,
+    basePlotSize.w,
+    imageSize,
+    layout.l,
+    layout.ph,
+    layout.pw,
+    layout.t,
+    overlayLocked,
+    calibrationImageScale,
+  ]);
+
+  const backdropBounds = useMemo(
+    () =>
+      overlayLocked
+        ? { x: 0, y: 0 }
+        : {
+            x: Math.max(layout.pw, backdropFrame?.width ?? layout.pw),
+            y: Math.max(layout.ph, backdropFrame?.height ?? layout.ph),
+          },
+    [backdropFrame?.height, backdropFrame?.width, layout.ph, layout.pw, overlayLocked]
+  );
+
+  useEffect(() => {
+    setBackdropOffset((current) => ({
+      x: clamp(current.x, -backdropBounds.x, backdropBounds.x),
+      y: clamp(current.y, -backdropBounds.y, backdropBounds.y),
+    }));
+  }, [backdropBounds.x, backdropBounds.y]);
   const pushUndo = (p: Patch) => setUndo((u) => [p, ...u].slice(0, 50));
 
   function beginZoomTxn() {
@@ -785,22 +984,6 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
 
     setView(next);
   }
-
-  useEffect(() => {
-    const el = svgRef.current;
-    if (!el) return;
-
-    const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) setBbox({ w: r.width, h: r.height });
-    });
-
-    ro.observe(el);
-    const r0 = el.getBoundingClientRect();
-    if (r0.width > 0 && r0.height > 0) setBbox({ w: r0.width, h: r0.height });
-
-    return () => ro.disconnect();
-  }, []);
 
   // keep warps consistent with domain changes
   useEffect(() => {
@@ -857,6 +1040,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     if (!el) return;
 
     const onWheel = (ev: WheelEvent) => {
+      if (overlayLocked) return;
       if (gridDragAxis) return;
       if (tickDragRef.current || pointDragRef.current || panRef.current) return;
 
@@ -880,31 +1064,65 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
 
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [scale, gridDragAxis]);
+  }, [overlayLocked, scale, gridDragAxis]);
 
   const ticksX = useMemo(
-    () => (warpX ? warpX.dataKnots : niceTicks(view.domainX[0], view.domainX[1], 6)),
-    [warpX, view.domainX]
+    () =>
+      overlayLocked && calibration?.xAxisSamples.length
+        ? calibration.xAxisSamples.map((sample) => sample.value)
+        : warpX
+          ? warpX.dataKnots
+          : calibration?.xAxisSamples.length
+          ? calibration.xAxisSamples.map((sample) => sample.value)
+          : calibration?.xTicks.length
+          ? calibration.xTicks
+          : niceTicks(view.domainX[0], view.domainX[1], 6),
+    [calibration, overlayLocked, warpX, view.domainX]
   );
   const ticksY = useMemo(
-    () => (warpY ? warpY.dataKnots : niceTicks(view.domainY[0], view.domainY[1], 6)),
-    [warpY, view.domainY]
+    () =>
+      overlayLocked && calibration?.yAxisSamples.length
+        ? calibration.yAxisSamples.map((sample) => sample.value)
+        : warpY
+          ? warpY.dataKnots
+          : calibration?.yAxisSamples.length
+          ? calibration.yAxisSamples.map((sample) => sample.value)
+          : calibration?.yTicks.length
+          ? calibration.yTicks
+          : niceTicks(view.domainY[0], view.domainY[1], 6),
+    [calibration, overlayLocked, warpY, view.domainY]
   );
 
-  const commitResultJson = (nextPanels: Panel[]) => {
+  const commitResultJson = (nextResultJson: any) => {
     if (!onResultJsonChange) return;
-    onResultJsonChange(buildNextResultJson(resultJson, nextPanels));
+    onResultJsonChange(nextResultJson);
   };
 
   const setPanelsAndEmit = (updater: (prev: Panel[]) => Panel[]) => {
     setPanels((prev) => {
-      const next = updater(prev);
-      commitResultJson(next);
+      const updated = updater(prev);
+      if (updated === prev) return prev;
+
+      const next = stripCurvePreview(updated);
+      const nextResultJson = buildNextResultJson(resultJson, next);
+      commitResultJson(nextResultJson);
+      requestServerPreview(next);
       return next;
     });
   };
 
   const onAuto = () => {
+    if (calibration) {
+      const before = view;
+      const after: View = {
+        domainX: [...calibration.xDomain] as [number, number],
+        domainY: [...calibration.yDomain] as [number, number],
+      };
+      setView(after);
+      pushUndo({ type: "set-domain", before, after });
+      return;
+    }
+
     const all = seriesList.flatMap((s) => s.points);
     if (!all.length) return;
 
@@ -994,12 +1212,6 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
           p0.series.splice(p.index, 0, structuredClone(p.series));
           return next;
         }
-        case "set-interp": {
-          const s = findSeries(p.seriesId);
-          if (!s) return prev;
-          s.interp = p.before;
-          return next;
-        }
         case "rename-series": {
           const s = findSeries(p.seriesId);
           if (!s) return prev;
@@ -1036,12 +1248,13 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         setMode("select");
         setGridDragAxis(null);
         setPanMode(false);
+        setBackdropMoveMode(false);
         setHover(null);
         setVisOpen(false);
         return;
       }
 
-      if (e.key === "Delete" || e.key === "Backspace") {
+      if (!compactMode && (e.key === "Delete" || e.key === "Backspace")) {
         if (!selection) return;
         e.preventDefault();
         deleteSelectedPoint();
@@ -1051,14 +1264,14 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection, undo.length]);
+  }, [compactMode, selection, undo.length]);
 
   const addSeries = () => {
     const s: Series = {
       id: uid("series"),
       name: `Кривая ${seriesList.length + 1}`,
-      interp: "linear",
       points: [],
+      curvePoints: [],
     };
 
     setPanelsAndEmit((prev) => {
@@ -1099,30 +1312,15 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     setHover(null);
   };
 
-  const cycleInterp = () => {
-    if (!activeSeries) return;
-    const before = activeSeries.interp;
-    const after: Series["interp"] = before === "linear" ? "poly" : before === "poly" ? "lsq" : "linear";
-
-    setPanelsAndEmit((prev) => {
-      const next = structuredClone(prev) as Panel[];
-      const p0 = next[0] ?? { series: [] };
-      next[0] = p0;
-      const s = p0.series.find((x) => x.id === activeSeries.id);
-      if (!s) return prev;
-      s.interp = after;
-      pushUndo({ type: "set-interp", seriesId: s.id, before, after });
-      return next;
-    });
-  };
-
   const toggleGridDrag = (axis: "x" | "y") => {
+    if (overlayLocked) return;
     if (panMode) return;
 
     setMode("select");
     setErr(null);
     setSelection(null);
     setHover(null);
+    setBackdropMoveMode(false);
 
     if (axis === "x") {
       setWarpX((w) => w ?? buildWarpFromTicks(view.domainX, 6));
@@ -1141,6 +1339,22 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
   const invYFrom = (v: View, w: AxisWarp | null, py: number) => {
     const s = (layout.t + layout.ph - clamp(py, layout.t, layout.t + layout.ph)) / (layout.ph || 1);
     return axisScreenToValue(s, v.domainY, w);
+  };
+
+  const startBackdropDrag = (e: React.PointerEvent) => {
+    if (overlayLocked) return;
+    if (!canMoveBackdrop) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    backdropDragRef.current = {
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startOffset: { ...backdropOffset },
+    };
+    svgRef.current?.setPointerCapture?.(e.pointerId);
   };
 
   const startPanFromEvent = (e: React.PointerEvent) => {
@@ -1209,6 +1423,11 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
   };
 
   const onSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (backdropMoveMode && canMoveBackdrop) {
+      startBackdropDrag(e);
+      return;
+    }
+
     if (gridDragAxis) return;
 
     if (panMode) {
@@ -1219,7 +1438,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     if (mode !== "add-point") return;
 
     if (!activeSeries) {
-      setErr("Сначала выберите/создайте кривую");
+      setErr("Сначала выберите или создайте кривую");
       return;
     }
 
@@ -1262,6 +1481,11 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
   };
 
   const onHandlePointerDown = (e: React.PointerEvent, seriesId: string, index: number) => {
+    if (backdropMoveMode && canMoveBackdrop) {
+      startBackdropDrag(e);
+      return;
+    }
+
     if (gridDragAxis) return;
 
     if (panMode) {
@@ -1294,6 +1518,17 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
   };
 
   const onSvgPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (backdropDragRef.current) {
+      const drag = backdropDragRef.current;
+      if (e.pointerId !== drag.pointerId) return;
+
+      setBackdropOffset({
+        x: clamp(drag.startOffset.x + (e.clientX - drag.startClientX), -backdropBounds.x, backdropBounds.x),
+        y: clamp(drag.startOffset.y + (e.clientY - drag.startClientY), -backdropBounds.y, backdropBounds.y),
+      });
+      return;
+    }
+
     // tick drag
     if (tickDragRef.current) {
       const t = tickDragRef.current;
@@ -1371,6 +1606,13 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
   };
 
   const onSvgPointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (backdropDragRef.current) {
+      const drag = backdropDragRef.current;
+      if (e.pointerId !== drag.pointerId) return;
+      backdropDragRef.current = null;
+      return;
+    }
+
     // finish tick drag
     if (tickDragRef.current) {
       const t = tickDragRef.current;
@@ -1442,24 +1684,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
 
         const pts = s.points.slice().sort((a, b) => a.x - b.x);
 
-        let drawPts = pts;
-
-        if (s.interp === "poly") {
-          drawPts = splineSample(pts, 300);
-        } else if (s.interp === "lsq") {
-          const degWanted = Math.min(LSQ_MAX_DEG, Math.max(1, pts.length - 1));
-          const fit = lsqFit(pts, degWanted);
-          if (fit) {
-            const N = 300;
-            const out: Point[] = [];
-            for (let k = 0; k <= N; k++) {
-              const x = fit.xMin + ((fit.xMax - fit.xMin) * k) / N;
-              out.push({ x, y: evalPolyCoeffs(fit.aX, x) });
-            }
-            drawPts = out;
-          }
-        }
-
+        const drawPts = s.curvePoints.length ? s.curvePoints : pts;
         return { id: s.id, d: mkPath(drawPts) };
       })
       .filter(Boolean) as { id: string; d: string }[];
@@ -1501,17 +1726,20 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
     </div>
   );
 
-  const hint =
-    gridDragAxis === "x"
-      ? "Режим: перетаскивание тиков по X"
+  const hint = compactMode
+    ? ""
+    : backdropMoveMode
+      ? "Режим: перемещение фона"
+      : gridDragAxis === "x"
+      ? "Режим: сдвиг сетки X"
       : gridDragAxis === "y"
-      ? "Режим: перетаскивание тиков по Y"
+      ? "Режим: сдвиг сетки Y"
       : panMode
-      ? "Режим: перемещение (Pan)"
+      ? "Режим: панорама"
       : mode === "delete-point"
-      ? "Режим: удаление точек (клик по точке)"
+      ? "Режим: удаление точек"
       : mode === "add-point"
-      ? "Режим: добавление точки (клик по полю)"
+      ? "Режим: добавление точек"
       : "";
 
   const clipId = useMemo(() => uid("plotClip"), []);
@@ -1553,9 +1781,11 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="secondary" type="button" onClick={onAuto} disabled={gridDragAxis !== null || panMode}>
-          Auto
-        </Button>
+        {!compactMode && (
+          <Button variant="secondary" type="button" onClick={onAuto} disabled={gridDragAxis !== null || panMode}>
+            Авто
+          </Button>
+        )}
 
         <Button
           variant="secondary"
@@ -1564,13 +1794,15 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
           disabled={undo.length === 0}
           title={undo.length === 0 ? "Нет действий для отмены" : ""}
         >
-          Undo
+          Отменить
         </Button>
 
+        {!compactMode && (
+          <>
         <Button
           variant="secondary"
           type="button"
-          disabled={gridDragAxis !== null}
+          disabled={gridDragAxis !== null || overlayLocked}
           onClick={() => {
             const [x0, x1] = view.domainX;
             const [y0, y1] = view.domainY;
@@ -1578,13 +1810,13 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
             zoomAtData((x0 + x1) / 2, (y0 + y1) / 2, 1 / ZOOM_STEP, "both");
           }}
         >
-          Zoom +
+          Приблизить
         </Button>
 
         <Button
           variant="secondary"
           type="button"
-          disabled={gridDragAxis !== null}
+          disabled={gridDragAxis !== null || overlayLocked}
           onClick={() => {
             const [x0, x1] = view.domainX;
             const [y0, y1] = view.domainY;
@@ -1592,13 +1824,13 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
             zoomAtData((x0 + x1) / 2, (y0 + y1) / 2, ZOOM_STEP, "both");
           }}
         >
-          Zoom −
+          Отдалить
         </Button>
 
         <Button
           variant={panMode ? "primary" : "secondary"}
           type="button"
-          disabled={gridDragAxis !== null}
+          disabled={gridDragAxis !== null || overlayLocked}
           onClick={() => {
             setPanMode((v) => {
               const next = !v;
@@ -1607,13 +1839,114 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
                 setSelection(null);
                 setGridDragAxis(null);
                 setHover(null);
+                setBackdropMoveMode(false);
               }
               return next;
             });
           }}
         >
-          Pan
+          Панорама
         </Button>
+
+        <Button
+          variant={backdropMoveMode ? "primary" : "secondary"}
+          type="button"
+          disabled={!canMoveBackdrop}
+          title={
+            overlayLocked
+              ? "В режиме точного наложения подложка фиксирована"
+              : canMoveBackdrop
+                ? "Перемещать подложку мышью"
+                : "Сначала включите подложку"
+          }
+          onClick={() => {
+            setErr(null);
+            setPanMode(false);
+            setGridDragAxis(null);
+            setHover(null);
+            setSelection(null);
+            setMode("select");
+            setBackdropMoveMode((value) => !value);
+          }}
+        >
+          Сдвиг фона
+        </Button>
+
+        <Button
+          variant="secondary"
+          type="button"
+          disabled={Math.abs(editorWidthScale - 1) < 1e-6 && Math.abs(editorHeightScale - 1) < 1e-6}
+          onClick={() => {
+            setEditorWidthScale(1);
+            setEditorHeightScale(1);
+          }}
+        >
+          Сбросить размер редактора
+        </Button>
+
+        <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+          <span className="text-xs text-slate-600 dark:text-slate-300">Ширина</span>
+          <input
+            type="number"
+            min={Math.round(MIN_EDITOR_WINDOW_SCALE * 100)}
+            step={Math.round(EDITOR_WINDOW_SCALE_STEP * 100)}
+            value={Math.round(editorWidthScale * 100)}
+            onChange={(e) => {
+              const nextPercent = Number(e.target.value);
+              if (!Number.isFinite(nextPercent)) return;
+              setEditorWidthScale(Math.max(MIN_EDITOR_WINDOW_SCALE, nextPercent / 100));
+            }}
+            className="h-8 w-24 rounded-lg bg-white px-2 text-sm ring-1 ring-slate-200 outline-none dark:bg-slate-950 dark:ring-slate-800"
+          />
+          <span className="text-xs text-slate-500 dark:text-slate-400">%</span>
+        </div>
+
+        <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+          <span className="text-xs text-slate-600 dark:text-slate-300">Высота</span>
+          <input
+            type="number"
+            min={Math.round(MIN_EDITOR_WINDOW_SCALE * 100)}
+            step={Math.round(EDITOR_WINDOW_SCALE_STEP * 100)}
+            value={Math.round(editorHeightScale * 100)}
+            onChange={(e) => {
+              const nextPercent = Number(e.target.value);
+              if (!Number.isFinite(nextPercent)) return;
+              setEditorHeightScale(Math.max(MIN_EDITOR_WINDOW_SCALE, nextPercent / 100));
+            }}
+            className="h-8 w-24 rounded-lg bg-white px-2 text-sm ring-1 ring-slate-200 outline-none dark:bg-slate-950 dark:ring-slate-800"
+          />
+          <span className="text-xs text-slate-500 dark:text-slate-400">%</span>
+        </div>
+
+        <Button
+          variant="secondary"
+          type="button"
+          disabled={!canMoveBackdrop || !hasBackdropTransform}
+          onClick={() => {
+            setBackdropScale(1);
+            setBackdropOffset({ x: 0, y: 0 });
+          }}
+        >
+          Сбросить фон
+        </Button>
+
+        {canMoveBackdrop && (
+          <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+            <span className="text-xs text-slate-600 dark:text-slate-300">Фон</span>
+            <input
+              type="range"
+              min={Math.round(MIN_BACKDROP_SCALE * 100)}
+              max={Math.round(MAX_BACKDROP_SCALE * 100)}
+              step={Math.round(BACKDROP_SCALE_STEP * 100)}
+              value={Math.round(backdropScale * 100)}
+              onChange={(e) =>
+                setBackdropScale(clamp(Number(e.target.value) / 100, MIN_BACKDROP_SCALE, MAX_BACKDROP_SCALE))
+              }
+              className="w-28"
+            />
+            <span className="text-xs text-slate-500 dark:text-slate-400">{Math.round(backdropScale * 100)}%</span>
+          </div>
+        )}
 
         <Button
           variant={mode === "add-point" ? "primary" : "secondary"}
@@ -1624,6 +1957,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
             setGridDragAxis(null);
             setHover(null);
             setSelection(null);
+            setBackdropMoveMode(false);
             setMode((m) => (m === "add-point" ? "select" : "add-point"));
           }}
           disabled={gridDragAxis !== null || panMode}
@@ -1641,12 +1975,13 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
             setGridDragAxis(null);
             setHover(null);
             setSelection(null);
+            setBackdropMoveMode(false);
             setMode((m) => (m === "delete-point" ? "select" : "delete-point"));
           }}
           disabled={gridDragAxis !== null || panMode}
-          title="Режим удаления: клик по точке удаляет её"
+          title="Режим удаления: клик по точке удаляет ее"
         >
-          − точка
+          - точка
         </Button>
 
         <Button variant="secondary" type="button" onClick={addSeries}>
@@ -1654,24 +1989,12 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         </Button>
 
         <Button variant="secondary" type="button" onClick={deleteActiveSeries} disabled={!activeSeries}>
-          − кривая
+          - кривая
         </Button>
 
-        <Button
-          variant="secondary"
-          type="button"
-          onClick={cycleInterp}
-          disabled={!activeSeries}
-          title="Переключить интерполяцию для активной кривой"
-        >
-          {activeSeries ? interpLabel(activeSeries.interp) : "Интерп."}
-        </Button>
-
-        {activeSeries?.interp === "lsq" && (
-          <Button variant="secondary" type="button" onClick={() => setShowPoly((v) => !v)}>
-            {showPoly ? "Скрыть полином" : "Показать полином"}
-          </Button>
-        )}
+        <div className="rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+          Кубический сплайн
+        </div>
 
         {/* dropdown: show/hide curves */}
         <div className="relative" ref={visRef}>
@@ -1744,7 +2067,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
 
                       {s.id === activeSeriesId && (
                         <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                          active
+                          активна
                         </span>
                       )}
                     </div>
@@ -1758,24 +2081,26 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         <Button
           variant={gridDragAxis === "x" ? "primary" : "secondary"}
           type="button"
-          disabled={panMode}
+          disabled={panMode || overlayLocked}
           onClick={() => toggleGridDrag("x")}
-          title="Включить/выключить режим перетаскивания тиков по X"
+          title={overlayLocked ? "Точное наложение фиксирует оси редактора" : "Включить или выключить режим перетаскивания тиков по X"}
         >
-          Drag grid X
+          Сдвиг сетки X
         </Button>
 
         <Button
           variant={gridDragAxis === "y" ? "primary" : "secondary"}
           type="button"
-          disabled={panMode}
+          disabled={panMode || overlayLocked}
           onClick={() => toggleGridDrag("y")}
-          title="Включить/выключить режим перетаскивания тиков по Y"
+          title={overlayLocked ? "Точное наложение фиксирует оси редактора" : "Включить или выключить режим перетаскивания тиков по Y"}
         >
-          Drag grid Y
+          Сдвиг сетки Y
         </Button>
+          </>
+        )}
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className={`${compactMode ? "" : "ml-auto "}flex flex-wrap items-center gap-2`}>
           <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
             <div className="text-xs text-slate-600 dark:text-slate-300">Точки</div>
             <input
@@ -1870,62 +2195,64 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
         </div>
       </div>
 
-      {activeSeries?.interp === "lsq" && showPoly && (
-        <Card
-          title="Многочлен МНК"
-          description={
-            polyInfo && "err" in polyInfo ? "—" : polyInfo ? `Степень: ${polyInfo.degree}` : "—"
-          }
+      {!compactMode && domainInputs}
+
+      <div className="w-full overflow-auto">
+        <div
+          className="mx-auto overflow-auto rounded-2xl bg-white ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800"
+          style={{ width: windowBox.w, height: windowBox.h }}
         >
-          {polyInfo && "err" in polyInfo ? (
-            <Alert variant="danger" title="Ошибка">
-              {polyInfo.err}
-            </Alert>
-          ) : (
-            <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-900 ring-1 ring-slate-200 dark:bg-slate-950 dark:text-slate-100 dark:ring-slate-800">
-              <div className="font-mono">{polyInfo?.formula ?? "—"}</div>
-            </div>
-          )}
-        </Card>
-      )}
+          <div className="relative" style={{ width: contentBox.w, height: contentBox.h }}>
+            {hover && (
+              <div
+                className="pointer-events-none absolute z-20 rounded-xl bg-slate-900 px-3 py-2 text-xs text-white shadow-sm"
+                style={{ left: hover.cx + 12, top: hover.cy - 8 }}
+              >
+                <div className="font-semibold opacity-90">{hover.seriesName}</div>
+                <div className="mt-1 opacity-90">
+                  x: {formatTick(hover.x)} &nbsp; y: {formatTick(hover.y)}
+                </div>
+              </div>
+            )}
 
-      {domainInputs}
+            <svg
+              ref={svgRef}
+              className="block touch-none"
+              width={contentBox.w}
+              height={contentBox.h}
+              style={{ cursor: backdropMoveMode ? (backdropDragRef.current ? "grabbing" : "grab") : panMode ? "grab" : mode === "delete-point" ? "crosshair" : "default" }}
+              onPointerDown={onSvgPointerDown}
+              onPointerMove={onSvgPointerMove}
+              onPointerUp={onSvgPointerUp}
+              onPointerCancel={onSvgPointerUp}
+            >
+              <defs>
+              <clipPath id={clipId}>
+                <rect x={layout.l} y={layout.t} width={layout.pw} height={layout.ph} />
+              </clipPath>
+            </defs>
 
-      <div className="relative rounded-2xl bg-white ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
-        {hover && (
-          <div
-            className="pointer-events-none absolute z-20 rounded-xl bg-slate-900 px-3 py-2 text-xs text-white shadow-sm"
-            style={{ left: hover.cx + 12, top: hover.cy - 8 }}
-          >
-            <div className="font-semibold opacity-90">{hover.seriesName}</div>
-            <div className="mt-1 opacity-90">
-              x: {formatTick(hover.x)} &nbsp; y: {formatTick(hover.y)}
-            </div>
-          </div>
-        )}
+            <rect
+              x={layout.l}
+              y={layout.t}
+              width={layout.pw}
+              height={layout.ph}
+              className="fill-slate-50 dark:fill-slate-950"
+            />
 
-        <svg
-          ref={svgRef}
-          className="block h-[420px] w-full touch-none"
-          style={{ cursor: panMode ? "grab" : mode === "delete-point" ? "crosshair" : "default" }}
-          onPointerDown={onSvgPointerDown}
-          onPointerMove={onSvgPointerMove}
-          onPointerUp={onSvgPointerUp}
-          onPointerCancel={onSvgPointerUp}
-        >
-          <defs>
-            <clipPath id={clipId}>
-              <rect x={layout.l} y={layout.t} width={layout.pw} height={layout.ph} />
-            </clipPath>
-          </defs>
-
-          <rect
-            x={layout.l}
-            y={layout.t}
-            width={layout.pw}
-            height={layout.ph}
-            className="fill-slate-50 dark:fill-slate-950"
-          />
+            {showBackdrop && backdropImageUrl && backdropFrame ? (
+              <image
+                href={backdropImageUrl}
+                x={backdropFrame.x}
+                y={backdropFrame.y}
+                width={backdropFrame.width}
+                height={backdropFrame.height}
+                preserveAspectRatio="none"
+                opacity={overlayLocked ? 1 : 0.35}
+                pointerEvents="none"
+                clipPath={overlayLocked ? undefined : `url(#${clipId})`}
+              />
+            ) : null}
 
           {ticksX.map((t, i) => {
             const x = scale.mapX(t);
@@ -2038,7 +2365,7 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
                     cy={cy}
                     r={r}
                     className={`${col.pointFill} ${active ? "opacity-100" : "opacity-85"}`}
-                    strokeWidth={0} // без обводки
+                    strokeWidth={0}
                     style={{ cursor: mode === "delete-point" ? "pointer" : undefined }}
                     onPointerDown={(e) => onHandlePointerDown(e, s.id, i)}
                     onPointerEnter={() =>
@@ -2108,8 +2435,11 @@ export default function GraphEditor({ resultJson, onResultJsonChange }: Props) {
               })}
             </g>
           )}
-        </svg>
+          </svg>
+        </div>
+      </div>
       </div>
     </div>
   );
 }
+

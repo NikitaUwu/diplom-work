@@ -1,74 +1,65 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import Card from "../components/ui/Card";
-import Button from "../components/ui/Button";
-import Alert from "../components/ui/Alert";
-import Badge from "../components/ui/Badge";
-import DropdownButton from "../components/ui/DropdownButton";
-import Carousel, { type CarouselItem } from "../components/Carousel";
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import Alert from '../components/ui/Alert';
+import Badge from '../components/ui/Badge';
+import DropdownButton from '../components/ui/DropdownButton';
+import Carousel, { type CarouselItem } from '../components/Carousel';
 import {
-  artifactUrl,
+  chartExportUrl,
+  chartFileUrl,
   deleteChart,
-  exportCsvUrl,
-  exportJsonUrl,
-  exportTxtUrl,
-  exportTableCsvUrl,
   listCharts,
-  originalUrl,
   type ChartCreateResponse,
   type ChartStatus,
-} from "../api/client";
+} from '../api/client';
 
-function statusLabel(s: ChartStatus) {
-  switch (s) {
-    case "uploaded":
-      return "Файл принят";
-    case "processing":
-      return "Обработка";
-    case "done":
-      return "Готово";
-    case "error":
-      return "Ошибка";
+function statusLabel(status: ChartStatus) {
+  switch (status) {
+    case 'uploaded':
+      return 'Файл принят';
+    case 'processing':
+      return 'Обработка';
+    case 'done':
+      return 'Готово';
+    case 'error':
+      return 'Ошибка';
     default:
-      return s;
+      return status;
   }
 }
 
-function statusVariant(s: ChartStatus) {
-  switch (s) {
-    case "done":
-      return "success";
-    case "processing":
-      return "info";
-    case "error":
-      return "danger";
+function statusVariant(status: ChartStatus) {
+  switch (status) {
+    case 'done':
+      return 'success';
+    case 'processing':
+      return 'info';
+    case 'error':
+      return 'danger';
     default:
-      return "default";
+      return 'default';
   }
 }
 
 function buildCarouselItems(chart: ChartCreateResponse): CarouselItem[] {
-  const rj: any = chart.result_json ?? {};
+  const resultJson: any = chart.result_json ?? {};
   const artifacts: Record<string, string> =
-    (rj && typeof rj === "object" ? rj.artifacts : {}) || {};
+    (resultJson && typeof resultJson === 'object' ? resultJson.artifacts : {}) || {};
 
-  const items: CarouselItem[] = [
-    { label: "Оригинал", src: originalUrl(chart.id) },
-
-    artifacts["lineformer_prediction"]
-      ? { label: "LineFormer", src: artifactUrl(chart.id, "lineformer_prediction") }
+  return [
+    { label: 'Оригинал', src: chartFileUrl(chart.id, 'original') },
+    artifacts.lineformer_prediction
+      ? { label: 'LineFormer', src: chartFileUrl(chart.id, 'lineformer_prediction') }
       : null,
-
-    artifacts["chartdete_predictions"]
-      ? { label: "ChartDete", src: artifactUrl(chart.id, "chartdete_predictions") }
+    artifacts.chartdete_predictions
+      ? { label: 'ChartDete', src: chartFileUrl(chart.id, 'chartdete_predictions') }
       : null,
-
-    artifacts["converted_plot"]
-      ? { label: "Plot", src: artifactUrl(chart.id, "converted_plot") }
+    artifacts.converted_plot
+      ? { label: 'Plot', src: chartFileUrl(chart.id, 'converted_plot') }
       : null,
   ].filter(Boolean) as CarouselItem[];
-
-  return items;
 }
 
 export default function ResultsPage() {
@@ -77,15 +68,14 @@ export default function ResultsPage() {
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
-
   async function load() {
     setLoading(true);
     setError(null);
+
     try {
-      const data = await listCharts();
-      setItems(data);
+      setItems(await listCharts());
     } catch (e: any) {
-      setError(e?.message ?? "Ошибка загрузки списка результатов");
+      setError(e?.message ?? 'Ошибка загрузки списка результатов');
     } finally {
       setLoading(false);
     }
@@ -104,9 +94,9 @@ export default function ResultsPage() {
 
     try {
       await deleteChart(id);
-      setItems((prev) => prev.filter((x) => x.id !== id));
+      setItems((prev) => prev.filter((item) => item.id !== id));
     } catch (e: any) {
-      setError(e?.message ?? "Ошибка удаления");
+      setError(e?.message ?? 'Ошибка удаления');
     } finally {
       setDeletingId(null);
     }
@@ -131,40 +121,46 @@ export default function ResultsPage() {
 
     return (
       <div className="mt-6 space-y-6">
-        {items.map((c) => {
-          const canExport = c.status === "done";
+        {items.map((chart) => {
+          const canExport = chart.status === 'done';
 
           return (
             <Card
-              key={c.id}
-              title={`Задача #${c.id}`}
-              description={`${c.original_filename} • ${new Date(c.created_at).toLocaleString()}`}
+              key={chart.id}
+              title={`Задача #${chart.id}`}
+              description={`${chart.original_filename} • ${new Date(chart.created_at).toLocaleString()}`}
               right={
                 <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
-                  <Badge variant={statusVariant(c.status) as any}>{statusLabel(c.status)}</Badge>
+                  <Badge variant={statusVariant(chart.status) as any}>{statusLabel(chart.status)}</Badge>
 
-                  <Link to={`/charts/${c.id}`}>
+                  <Link to={`/charts/${chart.id}`}>
                     <Button variant="secondary">Открыть</Button>
                   </Link>
+
+                  {canExport && (
+                    <Link to={`/charts/${chart.id}/spline-points`}>
+                      <Button variant="secondary">Сплайн по N</Button>
+                    </Link>
+                  )}
 
                   <DropdownButton
                     label="Скачать"
                     variant="primary"
                     disabled={!canExport}
                     items={[
-                      { label: "CSV", href: exportCsvUrl(c.id) },
-                      { label: "TXT", href: exportTxtUrl(c.id) },
-                      { label: "JSON", href: exportJsonUrl(c.id) },
-                      { label: "TABLE", href: exportTableCsvUrl(c.id) }
+                      { label: 'CSV', href: chartExportUrl(chart.id, 'csv') },
+                      { label: 'TXT', href: chartExportUrl(chart.id, 'txt') },
+                      { label: 'JSON', href: chartExportUrl(chart.id, 'json') },
+                      { label: 'TABLE', href: chartExportUrl(chart.id, 'table_csv') },
                     ]}
                   />
 
                   <button
                     type="button"
-                    onClick={() => onDelete(c.id)}
-                    disabled={deletingId === c.id}
-                    title={`Удалить задачу #${c.id}`}
-                    aria-label={`Удалить задачу #${c.id}`}
+                    onClick={() => onDelete(chart.id)}
+                    disabled={deletingId === chart.id}
+                    title={`Удалить задачу #${chart.id}`}
+                    aria-label={`Удалить задачу #${chart.id}`}
                     className="inline-flex h-9 w-10 items-center justify-center rounded-xl px-3
                                bg-rose-600 text-white shadow-sm ring-1 ring-rose-600/30
                                transition hover:bg-rose-700 active:scale-[0.98]
@@ -177,24 +173,24 @@ export default function ResultsPage() {
             >
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_280px]">
                 <div>
-                  <Carousel items={buildCarouselItems(c)} />
+                  <Carousel items={buildCarouselItems(chart)} />
                 </div>
 
                 <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200 dark:bg-slate-900/40 dark:ring-slate-800">
                   <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">Информация</div>
                   <div className="mt-2 text-sm text-slate-700 dark:text-slate-300">
                     <div>
-                      <span className="text-slate-500 dark:text-slate-400">Статус:</span> {statusLabel(c.status)}
+                      <span className="text-slate-500 dark:text-slate-400">Статус:</span> {statusLabel(chart.status)}
                     </div>
                     <div>
-                      <span className="text-slate-500 dark:text-slate-400">Серий:</span> {c.n_series ?? "—"}
+                      <span className="text-slate-500 dark:text-slate-400">Серий:</span> {chart.n_series ?? '—'}
                     </div>
                     <div>
-                      <span className="text-slate-500 dark:text-slate-400">Панелей:</span> {c.n_panels ?? "—"}
+                      <span className="text-slate-500 dark:text-slate-400">Панелей:</span> {chart.n_panels ?? '—'}
                     </div>
-                    {c.status === "error" && c.error_message && (
+                    {chart.status === 'error' && chart.error_message && (
                       <div className="mt-3 rounded-xl bg-white p-3 text-xs text-rose-700 ring-1 ring-rose-200 dark:bg-slate-950 dark:text-rose-300 dark:ring-rose-900/40">
-                        {c.error_message}
+                        {chart.error_message}
                       </div>
                     )}
                   </div>
@@ -205,7 +201,7 @@ export default function ResultsPage() {
         })}
       </div>
     );
-  }, [items, loading, error, deletingId, onDelete]);
+  }, [deletingId, error, items, loading, onDelete]);
 
   return (
     <div className="min-h-full">

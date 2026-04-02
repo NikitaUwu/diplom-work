@@ -4,6 +4,7 @@ import ChartPage from "./pages/ChartPage";
 import ResultsPage from "./pages/ResultsPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
+import SplinePointsPage from "./pages/SplinePointsPage";
 import { RequireAuth, RedirectIfAuth } from "./routes";
 import ThemeToggleGlobal from "./components/ThemeToggleGlobal";
 
@@ -45,6 +46,14 @@ export default function App() {
           element={
             <RequireAuth>
               <ResultsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/charts/:id/spline-points"
+          element={
+            <RequireAuth>
+              <SplinePointsPage />
             </RequireAuth>
           }
         />

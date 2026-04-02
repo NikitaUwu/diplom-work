@@ -4,14 +4,29 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChartStatus(str, Enum):
-    uploaded = "uploaded"
-    processing = "processing"
-    done = "done"
-    error = "error"
+    uploaded = 'uploaded'
+    processing = 'processing'
+    done = 'done'
+    error = 'error'
+
+
+class ChartExportFormat(str, Enum):
+    csv = 'csv'
+    txt = 'txt'
+    json = 'json'
+    table_csv = 'table_csv'
+
+
+class ChartUpdateRequest(BaseModel):
+    result_json: dict[str, Any]
+
+
+class ChartSplinePointsRequest(BaseModel):
+    total_points: int = Field(default=3, ge=2)
 
 
 class ChartCreateResponse(BaseModel):

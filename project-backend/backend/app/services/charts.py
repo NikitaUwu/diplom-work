@@ -119,7 +119,7 @@ class ChartService:
                 mime_type=upload.content_type or "application/octet-stream",
                 sha256=sha,
                 original_path="",  # обновим ниже
-                status=ChartStatus.uploaded.value,
+                status=ChartStatus.processing.value,
             )
 
             # 2) создаём папку user_N/<chart_id> и кладём туда оригинал
@@ -138,6 +138,7 @@ class ChartService:
 
             # 3) обновляем путь в БД
             chart.original_path = str(original_path)
+            chart.status = ChartStatus.uploaded.value
             db.add(chart)
             db.commit()
             db.refresh(chart)

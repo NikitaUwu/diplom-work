@@ -1,16 +1,29 @@
 const rawBaseUrl = import.meta.env.VITE_API_BASE_URL;
 
-if (typeof rawBaseUrl !== "string" || rawBaseUrl.trim() === "") {
-  throw new Error("VITE_API_BASE_URL is not set");
+if (typeof rawBaseUrl !== 'string' || rawBaseUrl.trim() === '') {
+  throw new Error('VITE_API_BASE_URL is not set');
 }
 
-const BASE_URL = rawBaseUrl.replace(/\/+$/, "");
+const BASE_URL = rawBaseUrl.replace(/\/+$/, '');
 
 function apiUrl(path: string): string {
   return `${BASE_URL}${path}`;
 }
 
-export type ChartStatus = "uploaded" | "processing" | "done" | "error";
+function withQuery(path: string, params: Record<string, string | number | boolean | null | undefined>): string {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    query.set(key, String(value));
+  });
+
+  const suffix = query.toString();
+  return suffix ? `${path}?${suffix}` : path;
+}
+
+export type ChartStatus = 'uploaded' | 'processing' | 'done' | 'error';
+export type ChartExportFormat = 'csv' | 'txt' | 'json' | 'table_csv';
 
 export interface ChartCreateResponse {
   id: number;
@@ -51,170 +64,186 @@ async function readError(res: Response): Promise<string> {
   try {
     const data = (await res.json()) as unknown;
 
-    if (typeof data === "string") {
-      return `${res.status} ${res.statusText} — ${data}`;
+    if (typeof data === 'string') {
+      return `${res.status} ${res.statusText} - ${data}`;
     }
 
-    if (data && typeof data === "object") {
+    if (data && typeof data === 'object') {
       const maybeDetail = (data as { detail?: unknown }).detail;
 
-      if (typeof maybeDetail === "string") {
-        return `${res.status} ${res.statusText} — ${maybeDetail}`;
+      if (typeof maybeDetail === 'string') {
+        return `${res.status} ${res.statusText} - ${maybeDetail}`;
       }
 
       if (Array.isArray(maybeDetail)) {
         const msg = maybeDetail
           .map((item) => {
-            if (typeof item === "string") return item;
-            if (item && typeof item === "object" && "msg" in item) {
-              const v = (item as { msg?: unknown }).msg;
-              return typeof v === "string" ? v : JSON.stringify(item);
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object' && 'msg' in item) {
+              const value = (item as { msg?: unknown }).msg;
+              return typeof value === 'string' ? value : JSON.stringify(item);
             }
             return JSON.stringify(item);
           })
-          .join("; ");
-        return `${res.status} ${res.statusText}${msg ? ` — ${msg}` : ""}`;
+          .join('; ');
+        return `${res.status} ${res.statusText}${msg ? ` - ${msg}` : ''}`;
       }
 
-      return `${res.status} ${res.statusText} — ${JSON.stringify(data)}`;
+      return `${res.status} ${res.statusText} - ${JSON.stringify(data)}`;
     }
   } catch {
     // fallback below
   }
 
-  const text = await res.text().catch(() => "");
-  return `${res.status} ${res.statusText}${text ? ` — ${text}` : ""}`;
+  const text = await res.text().catch(() => '');
+  return `${res.status} ${res.statusText}${text ? ` - ${text}` : ''}`;
 }
 
-// ---------- AUTH ----------
-
-export async function register(data: RegisterRequest): Promise<UserRead> {
-  const res = await fetch(apiUrl("/auth/register"), {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
+async function apiFetch(path: string, init: RequestInit, action: string): Promise<Response> {
+  const res = await fetch(apiUrl(path), {
+    credentials: 'include',
+    ...init,
   });
 
-  if (!res.ok) throw new Error(`Register failed: ${await readError(res)}`);
-  return res.json();
+  if (!res.ok) {
+    throw new Error(`${action} failed: ${await readError(res)}`);
+  }
+
+  return res;
+}
+
+async function apiFetchJson<T>(path: string, init: RequestInit, action: string): Promise<T> {
+  const res = await apiFetch(path, init, action);
+  return (await res.json()) as T;
+}
+
+export async function register(data: RegisterRequest): Promise<UserRead> {
+  return apiFetchJson<UserRead>(
+    '/auth/register',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    },
+    'Register'
+  );
 }
 
 export async function login(data: LoginRequest): Promise<Token> {
-  const res = await fetch(apiUrl("/auth/login"), {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-
-  if (!res.ok) throw new Error(`Login failed: ${await readError(res)}`);
-  return res.json();
+  return apiFetchJson<Token>(
+    '/auth/login',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    },
+    'Login'
+  );
 }
 
 export async function me(): Promise<UserRead> {
-  const res = await fetch(apiUrl("/auth/me"), {
-    method: "GET",
-    credentials: "include",
-  });
-
-  if (!res.ok) throw new Error(`Me failed: ${await readError(res)}`);
-  return res.json();
+  return apiFetchJson<UserRead>('/auth/me', { method: 'GET' }, 'Me');
 }
 
 export async function logout(): Promise<void> {
-  const res = await fetch(apiUrl("/auth/logout"), {
-    method: "POST",
-    credentials: "include",
-  });
-
-  if (!res.ok) throw new Error(`Logout failed: ${await readError(res)}`);
+  await apiFetch('/auth/logout', { method: 'POST' }, 'Logout');
 }
 
 export async function clearToken(): Promise<void> {
   await logout();
 }
 
-// ---------- CHARTS ----------
-
 export async function uploadChart(file: File): Promise<ChartCreateResponse> {
-  const fd = new FormData();
-  fd.append("file", file);
+  const formData = new FormData();
+  formData.append('file', file);
 
-  const res = await fetch(apiUrl("/charts/upload"), {
-    method: "POST",
-    credentials: "include",
-    body: fd,
-  });
-
-  if (!res.ok) throw new Error(`Upload failed: ${await readError(res)}`);
-  return res.json();
+  return apiFetchJson<ChartCreateResponse>(
+    '/charts/upload',
+    {
+      method: 'POST',
+      body: formData,
+    },
+    'Upload'
+  );
 }
 
 export async function getChart(id: number): Promise<ChartCreateResponse> {
-  const res = await fetch(apiUrl(`/charts/${id}`), {
-    method: "GET",
-    credentials: "include",
-  });
-
-  if (!res.ok) throw new Error(`Fetch failed: ${await readError(res)}`);
-  return res.json();
-}
-
-export function artifactUrl(chartId: number, key: string): string {
-  return apiUrl(`/charts/${chartId}/artifact/${encodeURIComponent(key)}`);
+  return apiFetchJson<ChartCreateResponse>(`/charts/${id}`, { method: 'GET' }, 'Fetch chart');
 }
 
 export async function listCharts(): Promise<ChartCreateResponse[]> {
-  const res = await fetch(apiUrl("/charts"), {
-    method: "GET",
-    credentials: "include",
-  });
-
-  if (!res.ok) throw new Error(`Fetch failed: ${await readError(res)}`);
-  return res.json();
-}
-
-export function originalUrl(chartId: number): string {
-  return apiUrl(`/charts/${chartId}/original`);
-}
-
-export function exportCsvUrl(chartId: number): string {
-  return apiUrl(`/charts/${chartId}/export.csv`);
-}
-
-export function exportTxtUrl(chartId: number): string {
-  return apiUrl(`/charts/${chartId}/export.txt`);
-}
-
-export function exportJsonUrl(chartId: number): string {
-  return apiUrl(`/charts/${chartId}/export.json`);
+  return apiFetchJson<ChartCreateResponse[]>('/charts', { method: 'GET' }, 'List charts');
 }
 
 export async function deleteChart(id: number): Promise<void> {
-  const res = await fetch(apiUrl(`/charts/${id}`), {
-    method: "DELETE",
-    credentials: "include",
-  });
-
-  if (!res.ok) throw new Error(`Delete failed: ${await readError(res)}`);
+  await apiFetch(`/charts/${id}`, { method: 'DELETE' }, 'Delete chart');
 }
 
-export async function updateChartResultJson(
+export function chartFileUrl(chartId: number, fileKey: string): string {
+  return apiUrl(`/charts/${chartId}/files/${encodeURIComponent(fileKey)}`);
+}
+
+export function chartExportUrl(
+  chartId: number,
+  format: ChartExportFormat,
+  options: {
+    panelId?: string;
+    seriesId?: string;
+    pretty?: boolean;
+  } = {}
+): string {
+  return apiUrl(
+    withQuery(`/charts/${chartId}/export`, {
+      format,
+      panel_id: options.panelId,
+      series_id: options.seriesId,
+      pretty: options.pretty,
+    })
+  );
+}
+
+async function patchChartResult(
+  chartId: number,
+  resultJson: unknown,
+  persist: boolean
+): Promise<ChartCreateResponse> {
+  const path = withQuery(`/charts/${chartId}`, { persist });
+  return apiFetchJson<ChartCreateResponse>(
+    path,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result_json: resultJson }),
+    },
+    persist ? 'Save chart' : 'Preview chart'
+  );
+}
+
+export async function previewChartResult(
   chartId: number,
   resultJson: unknown
 ): Promise<ChartCreateResponse> {
-  const res = await fetch(apiUrl(`/charts/${chartId}/result_json`), {
-    method: "PUT",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(resultJson),
-  });
-
-  if (!res.ok) throw new Error(`Save failed: ${await readError(res)}`);
-  return res.json();
+  return patchChartResult(chartId, resultJson, false);
 }
 
-export function exportTableCsvUrl(chartId: number): string {
-  return apiUrl(`/charts/${chartId}/export.table.csv`);
+export async function saveChartResult(
+  chartId: number,
+  resultJson: unknown
+): Promise<ChartCreateResponse> {
+  return patchChartResult(chartId, resultJson, true);
+}
+
+export async function previewChartSplinePoints(
+  chartId: number,
+  totalPoints: number
+): Promise<ChartCreateResponse> {
+  return apiFetchJson<ChartCreateResponse>(
+    `/charts/${chartId}/cubic-preview`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ total_points: totalPoints }),
+    },
+    'Предпросмотр кубического сплайна по точкам'
+  );
 }
