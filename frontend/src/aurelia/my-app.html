@@ -1,0 +1,65 @@
+<template>
+  <div class="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+    <header class="sticky top-0 z-20 border-b border-slate-200/70 bg-white/90 backdrop-blur dark:border-slate-800/70 dark:bg-slate-950/85">
+      <div class="mx-auto flex w-full max-w-screen-xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-10">
+        <div class="min-w-0">
+          <a load="/" class="block text-sm font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">
+            Chart Extraction
+          </a>
+          <div class="truncate text-xs text-slate-500 dark:text-slate-400">
+            ${session.user ? session.user.email : 'Гостевой режим'}
+          </div>
+        </div>
+
+        <nav class="flex flex-wrap items-center gap-2">
+          <a
+            if.bind="!session.isAuthenticated"
+            load="/login"
+            class="inline-flex h-10 items-center rounded-xl px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900">
+            Вход
+          </a>
+
+          <a
+            if.bind="!session.isAuthenticated"
+            load="/register"
+            class="inline-flex h-10 items-center rounded-xl px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900">
+            Регистрация
+          </a>
+
+          <a
+            if.bind="session.isAuthenticated"
+            load="/upload"
+            class="inline-flex h-10 items-center rounded-xl px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900">
+            Загрузка
+          </a>
+
+          <a
+            if.bind="session.isAuthenticated"
+            load="/results"
+            class="inline-flex h-10 items-center rounded-xl px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900">
+            Результаты
+          </a>
+
+          <button
+            type="button"
+            click.trigger="toggleTheme()"
+            class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+            ${theme.theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+          </button>
+
+          <button
+            if.bind="session.isAuthenticated"
+            type="button"
+            click.trigger="logout()"
+            class="inline-flex h-10 items-center rounded-xl bg-rose-600 px-4 text-sm font-medium text-white transition hover:bg-rose-700">
+            Выйти
+          </button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="min-h-[calc(100vh-81px)]">
+      <au-viewport></au-viewport>
+    </main>
+  </div>
+</template>

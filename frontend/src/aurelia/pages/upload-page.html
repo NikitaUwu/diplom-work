@@ -1,0 +1,99 @@
+<template>
+  <div class="relative mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+    <div class="pointer-events-none absolute inset-0">
+      <div class="absolute -top-32 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-slate-200/60 blur-3xl dark:bg-slate-800/40"></div>
+      <div class="absolute -bottom-40 right-10 h-80 w-80 rounded-full bg-slate-200/50 blur-3xl dark:bg-slate-800/30"></div>
+    </div>
+
+    <div class="relative grid grid-cols-1 gap-4 lg:grid-cols-12 lg:items-start">
+      <div class="lg:col-span-6">
+        <div class="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200">
+          CHART EXTRACTION
+        </div>
+
+        <h1 class="mt-4 text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          Загрузка графика
+        </h1>
+        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+          Загрузите изображение. После завершения обработки откроется страница результата.
+        </p>
+      </div>
+
+      <div class="lg:col-span-6">
+        <div class="flex flex-wrap items-center gap-3 lg:justify-end">
+          <div if.bind="chart" class="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+            <div class="text-sm text-slate-600 dark:text-slate-300">
+              ID: <span class="font-medium text-slate-900 dark:text-slate-100">${chart.id}</span>
+            </div>
+            <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${chartStatusClass}">
+              ${chartStatusText}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="relative mt-8 grid grid-cols-1 gap-6 lg:grid-cols-12">
+      <section class="lg:col-span-7 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+        <div class="text-lg font-semibold text-slate-900 dark:text-slate-100">Загрузка изображения</div>
+        <div class="mt-1 text-sm text-slate-600 dark:text-slate-400">Поддерживаются изображения типа image/*</div>
+
+        <input
+          class="mt-5 block w-full cursor-pointer rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-slate-800 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200 dark:file:bg-slate-100 dark:file:text-slate-900 dark:hover:file:bg-white"
+          type="file"
+          accept="image/*"
+          change.trigger="onFileSelected($event)">
+
+        <div class="mt-5 flex flex-wrap gap-3">
+          <button
+            type="button"
+            click.trigger="upload()"
+            disabled.bind="!file || isUploading"
+            class="inline-flex h-11 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+            ${isUploading ? 'Загрузка…' : 'Отправить'}
+          </button>
+
+          <button
+            type="button"
+            click.trigger="reset()"
+            disabled.bind="isUploading"
+            class="inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+            Сброс
+          </button>
+        </div>
+
+        <div if.bind="error" class="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300">
+          ${error}
+        </div>
+
+        <div if.bind="chart?.status === 'processing'" class="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-5 dark:border-blue-900/40 dark:bg-blue-950/40">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <div class="text-sm font-semibold text-blue-900 dark:text-blue-100">Обработка</div>
+              <div class="mt-1 text-sm text-blue-800 dark:text-blue-200">
+                Идёт извлечение данных. Статус обновляется автоматически.
+              </div>
+            </div>
+            <div class="h-6 w-6 animate-spin rounded-full border-2 border-blue-200 border-t-blue-700 dark:border-blue-900/50 dark:border-t-blue-300"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="lg:col-span-5 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+        <div class="text-lg font-semibold text-slate-900 dark:text-slate-100">Превью</div>
+        <div class="mt-1 text-sm text-slate-600 dark:text-slate-400">${previewDescription}</div>
+
+        <div class="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
+          <img if.bind="previewUrl" src.bind="previewUrl" class="block w-full object-contain">
+          <div if.bind="!previewUrl" class="flex h-64 items-center justify-center text-sm text-slate-500 dark:text-slate-400">
+            Файл не выбран
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="relative mt-8 text-xs text-slate-500 dark:text-slate-400">
+      Если пайплайн завершится ошибкой, на странице результатов всё равно будут показаны диагностические изображения.
+    </div>
+  </div>
+</template>

@@ -1,0 +1,39 @@
+<template>
+  <div class="relative overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+    <div class="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-800 dark:bg-slate-900">
+      <div class="text-sm font-semibold text-slate-900 dark:text-slate-100">${currentItem?.label ?? 'Изображение'}</div>
+
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          click.trigger="prev()"
+          disabled.bind="!canNavigate">
+          ←
+        </button>
+        <div class="text-xs text-slate-500 dark:text-slate-400">${displayIndex} / ${safeItems.length || 1}</div>
+        <button
+          type="button"
+          class="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          click.trigger="next()"
+          disabled.bind="!canNavigate">
+          →
+        </button>
+      </div>
+    </div>
+
+    <div class="bg-slate-50 p-4 dark:bg-slate-950/30">
+      <div class="aspect-video overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+        <img
+          if.bind="currentItem"
+          src.bind="currentItem.src"
+          alt.bind="currentItem.label"
+          class="h-full w-full object-contain"
+          loading="lazy">
+        <div if.bind="!currentItem" class="flex h-full items-center justify-center text-sm text-slate-500 dark:text-slate-400">
+          Изображения недоступны
+        </div>
+      </div>
+    </div>
+  </div>
+</template>

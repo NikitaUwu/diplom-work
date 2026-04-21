@@ -1,0 +1,147 @@
+<template>
+  <div class="mx-auto w-full max-w-screen-xl px-4 py-8 sm:px-6 sm:py-10 lg:px-10">
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:items-center">
+      <div class="lg:col-span-5">
+        <div class="text-xs text-slate-500 dark:text-slate-400">Результаты обработки</div>
+        <h1 class="mt-1 text-2xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          График #${chartId || '—'}
+        </h1>
+      </div>
+
+      <div class="lg:col-span-7">
+        <div class="flex flex-wrap items-center gap-3 lg:justify-end">
+          <span if.bind="chart" class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${chartStatusClass}">
+            ${chartStatusText}
+          </span>
+
+          <a
+            load="/upload"
+            class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+            На загрузку
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <div if.bind="error" class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300">
+      ${error}
+    </div>
+
+    <div if.bind="saveError" class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300">
+      ${saveError}
+    </div>
+
+    <div if.bind="pollError" class="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/40 dark:text-amber-200">
+      ${pollError}
+    </div>
+
+    <div if.bind="chart?.status === 'error' && chart?.errorMessage" class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300">
+      ${chart.errorMessage}
+    </div>
+
+    <div class="mt-6 space-y-6">
+      <section if.bind="chart" class="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div class="text-lg font-semibold text-slate-900 dark:text-slate-100">Артефакты</div>
+            <div class="mt-1 text-sm text-slate-600 dark:text-slate-400">Оригинал и диагностические изображения пайплайна.</div>
+          </div>
+
+          <div if.bind="chart?.status === 'processing' || chart?.status === 'uploaded'" class="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-700 dark:border-slate-700 dark:border-t-slate-200"></div>
+        </div>
+
+        <div class="mt-6">
+          <image-carousel if.bind="artifactsItems.length" items.bind="artifactsItems"></image-carousel>
+          <div if.bind="!artifactsItems.length" class="rounded-2xl bg-slate-50 px-4 py-6 text-sm text-slate-600 ring-1 ring-slate-200 dark:bg-slate-900/40 dark:text-slate-300 dark:ring-slate-800">
+            Артефакты пока не доступны.
+          </div>
+        </div>
+      </section>
+
+      <section if.bind="isAwaitingEditorData" class="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+        <div class="flex items-center gap-4">
+          <div class="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-700 dark:border-slate-700 dark:border-t-slate-200"></div>
+          <div>
+            <div class="text-lg font-semibold text-slate-900 dark:text-slate-100">Подготавливаем данные редактора</div>
+            <div class="mt-1 text-sm text-slate-600 dark:text-slate-400">Статус уже получен, но результат для редактора еще не дошел до страницы. Обновление продолжается автоматически.</div>
+          </div>
+        </div>
+      </section>
+
+      <section if.bind="showEditor" class="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div class="text-lg font-semibold text-slate-900 dark:text-slate-100">Интерактивный редактор</div>
+            <div class="mt-1 text-sm text-slate-600 dark:text-slate-400">Редактирование извлеченных точек и предпросмотра сплайна с сервера.</div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              click.trigger="toggleBackdrop()"
+              class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+              ${showOriginalBackdrop ? 'Скрыть подложку' : 'Показать подложку'}
+            </button>
+
+            <a
+              load.bind="`/charts/${chartId}/spline-points`"
+              class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+              Сплайн по N
+            </a>
+
+            <button
+              type="button"
+              click.trigger="save()"
+              disabled.bind="!canSave"
+              class="inline-flex h-10 items-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+              ${saving ? 'Сохраняем…' : 'Сохранить'}
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-6">
+          <compact-graph-editor
+            chart-id.bind="chartId"
+            backdrop-image-url.bind="backdropImageUrl"
+            show-backdrop.bind="showOriginalBackdrop"
+            result-json.bind="editorResultJson"
+            mode="full"
+            on-result-json-change.bind="onEditorResultJsonChange">
+          </compact-graph-editor>
+        </div>
+      </section>
+
+      <section if.bind="hasExportableResult" class="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+        <div class="text-lg font-semibold text-slate-900 dark:text-slate-100">Экспорт</div>
+        <div class="mt-1 text-sm text-slate-600 dark:text-slate-400">Скачивание доступно после успешного извлечения точек.</div>
+
+        <div if.bind="dirty" class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/40 dark:text-amber-200">
+          Есть несохранённые изменения. Сначала сохраните их, чтобы экспортировать актуальную версию результата.
+        </div>
+
+        <div class="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+          <a
+            attr.href.bind="canExport ? exportUrl('csv') : null"
+            aria-disabled.bind="!canExport"
+            tabindex.bind="canExport ? null : '-1'"
+            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">CSV</a>
+          <a
+            attr.href.bind="canExport ? exportUrl('txt') : null"
+            aria-disabled.bind="!canExport"
+            tabindex.bind="canExport ? null : '-1'"
+            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">TXT</a>
+          <a
+            attr.href.bind="canExport ? exportUrl('json') : null"
+            aria-disabled.bind="!canExport"
+            tabindex.bind="canExport ? null : '-1'"
+            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">JSON</a>
+          <a
+            attr.href.bind="canExport ? exportUrl('table_csv') : null"
+            aria-disabled.bind="!canExport"
+            tabindex.bind="canExport ? null : '-1'"
+            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">TABLE</a>
+        </div>
+      </section>
+    </div>
+  </div>
+</template>

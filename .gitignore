@@ -1,0 +1,47 @@
+# виртуальное окружение
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# env-файл с секретами
+.env
+
+# временное хранилище файлов
+storage/
+
+# IDE/редакторы
+.vscode/
+.idea/
+
+# системное
+.DS_Store
+Thumbs.db
+
+# alembic кэш (если появится)
+alembic.ini~
+
+# .NET / Visual Studio
+.vs/
+bin/
+obj/
+TestResults/
+*.user
+*.suo
+appsettings.Development.json
+
+# Frontend
+node_modules/
+dist/
+.vite/
+
+# ML worker runtime artifacts
+runs/
+ml-worker/runs/
+ml-worker/data/
+ml-worker/output/
+ml-worker/outputs/
+ml-worker/extract-line-chart-data/examples/output/

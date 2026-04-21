@@ -1,0 +1,92 @@
+<template>
+  <div class="relative mx-auto flex min-h-[calc(100vh-81px)] w-full max-w-6xl items-center px-6 py-12">
+    <div class="pointer-events-none absolute inset-0 overflow-hidden">
+      <div class="absolute -top-24 left-1/2 h-72 w-72 -translate-x-1/2 rounded-full bg-slate-200/60 blur-3xl dark:bg-slate-800/40"></div>
+      <div class="absolute bottom-0 right-0 h-80 w-80 rounded-full bg-slate-200/40 blur-3xl dark:bg-slate-800/30"></div>
+    </div>
+
+    <div class="relative grid w-full grid-cols-1 gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+      <section class="rounded-3xl bg-slate-900 px-8 py-10 text-white shadow-sm ring-1 ring-white/10 sm:px-10">
+        <div class="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-semibold tracking-[0.22em] text-white/75 uppercase">
+          Chart Extraction
+        </div>
+
+        <h1 class="mt-6 text-3xl font-semibold leading-tight sm:text-4xl">
+          Сервис извлечения и редактирования кривых с изображений графиков
+        </h1>
+
+        <p class="mt-4 max-w-2xl text-sm leading-6 text-white/75 sm:text-base">
+          Загружайте изображения графиков, дождитесь автоматического распознавания и дорабатывайте результат
+          в редакторе с подложкой, сплайнами и экспортом данных.
+        </p>
+
+        <div class="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div class="rounded-2xl bg-white/8 p-4 ring-1 ring-white/10">
+            <div class="text-sm font-semibold">Загрузка</div>
+            <div class="mt-1 text-xs leading-5 text-white/70">Принимаем изображения графиков и запускаем ML-обработку.</div>
+          </div>
+
+          <div class="rounded-2xl bg-white/8 p-4 ring-1 ring-white/10">
+            <div class="text-sm font-semibold">Редактор</div>
+            <div class="mt-1 text-xs leading-5 text-white/70">Корректируйте точки, кривые и визуальное наложение поверх изображения.</div>
+          </div>
+
+          <div class="rounded-2xl bg-white/8 p-4 ring-1 ring-white/10">
+            <div class="text-sm font-semibold">Экспорт</div>
+            <div class="mt-1 text-xs leading-5 text-white/70">Сохраняйте результат в CSV, TXT, JSON и табличный CSV.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="rounded-3xl bg-white px-6 py-8 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800 sm:px-8">
+        <div class="text-sm font-semibold tracking-[0.18em] text-slate-500 uppercase dark:text-slate-400">
+          ${session.isAuthenticated ? 'Вы уже в системе' : 'Быстрый старт'}
+        </div>
+
+        <h2 class="mt-3 text-2xl font-semibold text-slate-900 dark:text-slate-100">
+          ${session.isAuthenticated ? 'Можно продолжать работу' : 'Выберите действие'}
+        </h2>
+
+        <p class="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+          ${session.isAuthenticated
+            ? `Вы вошли как ${session.user?.email}. Перейдите к загрузке нового изображения или откройте список результатов.`
+            : 'Чтобы пользоваться загрузкой, редактором и историей результатов, войдите в аккаунт или зарегистрируйтесь.'}
+        </p>
+
+        <div class="mt-6 flex flex-col gap-3">
+          <a
+            if.bind="!session.isAuthenticated"
+            load="/login"
+            class="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-900 px-5 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+            Войти
+          </a>
+
+          <a
+            if.bind="!session.isAuthenticated"
+            load="/register"
+            class="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+            Зарегистрироваться
+          </a>
+
+          <a
+            if.bind="session.isAuthenticated"
+            load="/upload"
+            class="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-900 px-5 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+            Загрузить график
+          </a>
+
+          <a
+            if.bind="session.isAuthenticated"
+            load="/results"
+            class="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+            Открыть результаты
+          </a>
+        </div>
+
+        <div class="mt-8 rounded-2xl bg-slate-50 p-4 text-sm leading-6 text-slate-600 ring-1 ring-slate-200 dark:bg-slate-950 dark:text-slate-300 dark:ring-slate-800">
+          Если backend еще не запущен, кнопки навигации все равно будут доступны, но авторизация и загрузка начнут работать после запуска API.
+        </div>
+      </section>
+    </div>
+  </div>
+</template>

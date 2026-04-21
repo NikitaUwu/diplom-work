@@ -1,0 +1,357 @@
+<template>
+  <div class="space-y-4">
+    <div
+      if.bind="error"
+      class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300">
+      ${error}
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2">
+      <button
+        if.bind="fullMode"
+        type="button"
+        click.trigger="autoFit()"
+        class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900">
+        Авто
+      </button>
+
+      <button
+        type="button"
+        click.trigger="undo()"
+        disabled.bind="!canUndo"
+        class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900">
+        Отменить
+      </button>
+
+      <button
+        if.bind="fullMode"
+        type="button"
+        click.trigger="resetEditorSize()"
+        class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900">
+        Сбросить размер редактора
+      </button>
+
+      <button
+        type="button"
+        click.trigger="toggleDeleteMode()"
+        class="inline-flex h-10 items-center rounded-xl border px-4 text-sm font-medium transition ${modeState === 'delete-point' ? 'border-rose-500 bg-rose-50 text-rose-700 dark:border-rose-500 dark:bg-rose-950/30 dark:text-rose-300' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900'}">
+        - точка
+      </button>
+
+      <button
+        if.bind="fullMode"
+        type="button"
+        click.trigger="addSeries()"
+        class="inline-flex h-10 items-center rounded-xl border border-dashed border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900">
+        + кривая
+      </button>
+
+      <div class="rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+        Кубический сплайн
+      </div>
+
+      <div class="relative" ref="visElement">
+        <button
+          type="button"
+          click.trigger="toggleVisOpen()"
+          class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900">
+          Кривые (${visibleSeriesCount}/${seriesList.length})
+        </button>
+
+        <div
+          if.bind="visOpen"
+          class="absolute left-0 z-30 mt-2 w-80 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
+          <div class="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2 dark:border-slate-800">
+            <div class="text-xs font-medium text-slate-600 dark:text-slate-300">Быстрый выбор</div>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                click.trigger="showAll()"
+                class="rounded-lg bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+                Все
+              </button>
+              <button
+                type="button"
+                click.trigger="showOnlyActive()"
+                disabled.bind="!activeSeriesId"
+                class="rounded-lg bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-800 ring-1 ring-slate-200 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-800/60 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-800">
+                Только активную
+              </button>
+            </div>
+          </div>
+
+          <div class="max-h-72 overflow-auto py-1">
+            <div
+              repeat.for="series of seriesList"
+              class="flex items-center gap-2 rounded-xl px-3 py-2 ${series.id === activeSeriesId ? 'bg-slate-100 ring-1 ring-slate-200 dark:bg-slate-800/80 dark:ring-slate-700' : 'hover:bg-slate-50 dark:hover:bg-slate-800/60'}">
+              <input
+                type="checkbox"
+                checked.to-view="isSeriesVisible(series.id)"
+                change.trigger="toggleVisible(series.id)"
+                class="h-4 w-4">
+
+              <button
+                type="button"
+                click.trigger="cycleSeriesColor(series.id)"
+                title="Клик: сменить цвет"
+                class="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800">
+                <span class="h-2.5 w-2.5 rounded-full" style="background-color:${colorOptions[(colorById[series.id] ?? 0)].strokeColor};"></span>
+                <span class="text-xs text-slate-500 dark:text-slate-400">цвет</span>
+              </button>
+
+              <button
+                type="button"
+                click.trigger="selectSeries(series.id)"
+                class="min-w-0 flex-1 text-left text-sm text-slate-800 dark:text-slate-200">
+                ${visSeriesLabel(series)}
+              </button>
+
+              <span
+                if.bind="series.id === activeSeriesId"
+                class="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                активна
+              </span>
+
+              <button
+                if.bind="fullMode"
+                type="button"
+                click.trigger="deleteSeries(series.id)"
+                title.bind="`Удалить кривую &quot;${series.name}&quot;`"
+                class="flex h-6 w-6 items-center justify-center rounded-full text-sm font-semibold text-red-500 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40">
+                x
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="${fullMode ? 'ml-auto ' : ''}flex flex-wrap items-center gap-2">
+        <div class="flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+          <div class="text-xs text-slate-600 dark:text-slate-300">Точки</div>
+          <input
+            type="range"
+            min="3"
+            max="10"
+            step="1"
+            value.two-way="pointRadius"
+            input.trigger="setPointRadius($event)"
+            class="w-28">
+          <div class="text-xs text-slate-500 dark:text-slate-400">${pointRadiusText}</div>
+        </div>
+
+        <div if.bind="activeSeries" class="relative z-40 flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+          <span class="text-xs text-slate-600 dark:text-slate-300">Цвет</span>
+          <span class="h-2.5 w-2.5 rounded-full" style.bind="currentColorDotStyle"></span>
+          <div class="flex items-center gap-1">
+            <button
+              repeat.for="color of colorOptions"
+              type="button"
+              title.bind="color.label"
+              click.trigger="selectColor($index)"
+              class.bind="$index === currentColorIndex ? 'flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 ring-2 ring-slate-500 dark:bg-slate-800 dark:ring-slate-200' : 'flex h-7 w-7 items-center justify-center rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800'">
+              <span
+                class="block h-4 w-4 rounded-full ring-1 ring-slate-200 dark:ring-slate-700"
+                style.bind="'background-color:' + color.strokeColor"></span>
+            </button>
+          </div>
+        </div>
+
+        <input
+          class="h-10 w-56 rounded-xl bg-white px-3 text-sm ring-1 ring-slate-200 outline-none transition focus:ring-2 focus:ring-slate-400 disabled:opacity-50 dark:bg-slate-950 dark:ring-slate-800"
+          placeholder="Название кривой"
+          value.to-view="activeSeries ? activeSeries.name : ''"
+          maxlength.bind="60"
+          disabled.bind="!activeSeries"
+          input.trigger="onSeriesNameInput($event)">
+
+        <select
+          value.to-view="activeSeriesId"
+          change.trigger="onActiveSeriesChange($event)"
+          class="h-10 rounded-xl bg-white px-3 text-sm ring-1 ring-slate-200 outline-none transition focus:ring-2 focus:ring-slate-400 dark:bg-slate-950 dark:ring-slate-800">
+          <option if.bind="seriesList.length === 0" value="">Нет кривых</option>
+          <option repeat.for="series of seriesList" value.bind="series.id" title.bind="series.name">${seriesOptionLabel(series)}</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="w-full overflow-auto">
+      <div
+        class="relative mx-auto overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800"
+        style.bind="editorShellStyle">
+        <div class="relative" style.bind="contentTransformStyle">
+          <img
+            if.bind="backdropImageUrl"
+            src.bind="backdropImageUrl"
+            alt=""
+            class="hidden"
+            load.trigger="onBackdropLoad($event)">
+
+          <img
+            if.bind="backdropFrame"
+            src.bind="backdropImageUrl"
+            draggable="false"
+            class="pointer-events-none absolute z-0 select-none"
+            style.bind="backdropImageStyle">
+
+          <div
+            if.bind="hover"
+            class="pointer-events-none absolute z-20 rounded-xl bg-slate-900 px-3 py-2 text-xs text-white shadow-sm"
+            style.bind="hoverStyle">
+            <div class="font-semibold opacity-90">${hover.seriesName}</div>
+            <div class="mt-1 opacity-90">x: ${formatTickLabel(hover.x)} y: ${formatTickLabel(hover.y)}</div>
+          </div>
+
+          <svg
+            ref="svgElement"
+            width.bind="contentBox.w & attr"
+            height.bind="contentBox.h & attr"
+            style="cursor:${svgCursor};"
+            class="relative z-10 block touch-none"
+            click.trigger="onCanvasClick($event)"
+            pointerdown.trigger="onCanvasPointerDown($event)"
+            dblclick.trigger="onCanvasDoubleClick($event)">
+            <defs>
+              <clipPath id.bind="clipId & attr">
+                <rect x.bind="layout.l & attr" y.bind="layout.t & attr" width.bind="layout.pw & attr" height.bind="layout.ph & attr"></rect>
+              </clipPath>
+            </defs>
+
+            <rect
+              x.bind="layout.l & attr"
+              y.bind="layout.t & attr"
+              width.bind="layout.pw & attr"
+              height.bind="layout.ph & attr"
+              fill.bind="plotFill & attr"></rect>
+
+            <g repeat.for="tick of ticksX">
+              <line
+                x1.bind="tickXPosition(tick) & attr"
+                y1.bind="layout.t & attr"
+                x2.bind="tickXPosition(tick) & attr"
+                y2.bind="layout.t + layout.ph & attr"
+                stroke="#e2e8f0"
+                stroke-width="1"></line>
+              <text
+                x.bind="tickXPosition(tick) & attr"
+                y.bind="layout.t + layout.ph + 18 & attr"
+                text-anchor="middle"
+                fill="#64748b"
+                font-size="11">
+                ${formatTickLabel(tick)}
+              </text>
+            </g>
+
+            <g repeat.for="tick of ticksY">
+              <line
+                x1.bind="layout.l & attr"
+                y1.bind="tickYPosition(tick) & attr"
+                x2.bind="layout.l + layout.pw & attr"
+                y2.bind="tickYPosition(tick) & attr"
+                stroke="#e2e8f0"
+                stroke-width="1"></line>
+              <text
+                x.bind="layout.l - 10 & attr"
+                y.bind="tickYPosition(tick) + 4 & attr"
+                text-anchor="end"
+                fill="#64748b"
+                font-size="11">
+                ${formatTickLabel(tick)}
+              </text>
+            </g>
+
+            <rect
+              x.bind="layout.l & attr"
+              y.bind="layout.t & attr"
+              width.bind="layout.pw & attr"
+              height.bind="layout.ph & attr"
+              fill="transparent"
+              stroke="#cbd5e1"
+              stroke-width="1"
+              pointer-events="all"
+              pointerdown.trigger="onCanvasPointerDown($event)"
+              dblclick.trigger="onCanvasDoubleClick($event)"></rect>
+
+            <g clip-path.bind="clipPathRef & attr">
+              <path
+                repeat.for="path of renderPaths"
+                d.bind="path.d & attr"
+                stroke.bind="path.stroke & attr"
+                stroke-width.bind="path.strokeWidth & attr"
+                opacity.bind="path.opacity & attr"
+                fill="none"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                pointer-events="stroke"
+                pointerdown.trigger="handlePathPointerDown($event, path.id)"></path>
+
+              <circle
+                repeat.for="point of renderPoints"
+                if.bind="point.showHandle"
+                cx.bind="point.cx & attr"
+                cy.bind="point.cy & attr"
+                r.bind="point.handleRadius & attr"
+                fill.bind="point.fill & attr"
+                opacity.bind="point.opacity & attr"
+                pointer-events="all"
+                pointerdown.trigger="handlePointPointerDown($event, point.seriesId, point.index)"
+                dblclick.trigger="onPointDoubleClick($event, point.seriesId, point.index)"
+                mouseenter.trigger="onPointEnter(point.point, point.seriesName)"
+                mouseleave.trigger="clearHover()"
+                click.trigger="onPointPointerDown($event, point.seriesId)"></circle>
+            </g>
+
+            <rect
+              if.bind="deleteSelectionBox"
+              x.bind="selectionRect(deleteSelectionBox).x & attr"
+              y.bind="selectionRect(deleteSelectionBox).y & attr"
+              width.bind="selectionRect(deleteSelectionBox).w & attr"
+              height.bind="selectionRect(deleteSelectionBox).h & attr"
+              fill="rgba(59, 130, 246, 0.12)"
+              stroke="rgba(59, 130, 246, 0.9)"
+              stroke-width="1.5"
+              stroke-dasharray="6 4"></rect>
+
+            <text
+              if.bind="chartHintVisible"
+              x.bind="layout.l + 10 & attr"
+              y.bind="layout.t + 18 & attr"
+              fill="#64748b"
+              font-size="12">
+              ${chartHint}
+            </text>
+          </svg>
+        </div>
+
+        <div
+          if.bind="fullMode"
+          class="absolute right-0 top-0 z-50 w-3 cursor-ew-resize touch-none bg-slate-300/25 transition hover:bg-slate-400/70 dark:bg-slate-600/25 dark:hover:bg-slate-500/70"
+          style="height:${windowBox.h}px;"
+          title="Потяните, чтобы изменить ширину редактора"
+          pointerdown.trigger="startResize($event, 'x')"></div>
+
+        <div
+          if.bind="fullMode"
+          class="absolute bottom-0 left-0 z-50 h-3 cursor-ns-resize touch-none bg-slate-300/25 transition hover:bg-slate-400/70 dark:bg-slate-600/25 dark:hover:bg-slate-500/70"
+          style="width:${windowBox.w}px;"
+          title="Потяните, чтобы изменить высоту редактора"
+          pointerdown.trigger="startResize($event, 'y')"></div>
+
+        <div
+          if.bind="fullMode"
+          class="absolute bottom-0 right-0 z-[60] flex cursor-nwse-resize touch-none items-center justify-center rounded-tl-xl bg-slate-400/90 text-slate-700 shadow-sm transition hover:bg-slate-500/90 dark:bg-slate-600/90 dark:text-slate-100 dark:hover:bg-slate-500"
+          style="width:24px;height:24px;"
+          title="Потяните за угол, чтобы изменить размер редактора"
+          pointerdown.trigger="startResize($event, 'both')">
+          <span class="pointer-events-none text-[10px] leading-none">⋰</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-xs text-slate-500 dark:text-slate-400">
+      <span if.bind="fullMode && modeState !== 'delete-point'">Двойной клик по полю добавляет точку. Точки можно перетаскивать мышью.</span>
+      <span if.bind="fullMode && modeState === 'delete-point'">Двойной клик по точке удаляет ее. Протяните рамку, чтобы удалить несколько точек сразу.</span>
+      <span if.bind="!fullMode">Точки можно перетаскивать мышью. Изменения сразу отправляются на сервер для пересчета сплайна.</span>
+    </div>
+  </div>
+</template>
+
