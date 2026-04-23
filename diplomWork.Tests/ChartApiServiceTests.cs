@@ -24,11 +24,12 @@ public sealed class ChartApiServiceTests
 
         var chart = await harness.Db.Charts.SingleAsync();
         var processingJob = await harness.Db.ProcessingJobs.SingleAsync();
-        var outboxMessage = await harness.Db.OutboxMessages.SingleAsync();
+        var outboxMessage = await harness.Db.MqttMessages.SingleAsync(item => item.Direction == "out");
 
         Assert.Equal(chart.Id, response.Id);
         Assert.Equal("uploaded", chart.Status);
         Assert.Equal("queued", processingJob.Status);
+        Assert.Equal("out", outboxMessage.Direction);
         Assert.Equal("pending", outboxMessage.Status);
         Assert.Equal(processingJob.Id, outboxMessage.ProcessingJobId);
         Assert.Equal(harness.Options.MqttProcessRequestTopic, outboxMessage.Topic);
@@ -59,7 +60,7 @@ public sealed class ChartApiServiceTests
         Assert.Equal(chart.Id, response.Id);
         Assert.Equal("uploaded", chart.Status);
         Assert.Equal("queued", processingJob.Status);
-        Assert.Empty(await harness.Db.OutboxMessages.ToListAsync());
+        Assert.Empty(await harness.Db.MqttMessages.Where(item => item.Direction == "out").ToListAsync());
         Assert.True(File.Exists(chart.OriginalPath));
     }
 

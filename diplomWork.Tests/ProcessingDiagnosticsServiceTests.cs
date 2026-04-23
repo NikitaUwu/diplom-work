@@ -41,36 +41,40 @@ public sealed class ProcessingDiagnosticsServiceTests
                 ErrorCode = ProcessingErrorCatalog.Codes.PipelineOutputInvalid,
             });
 
-        db.OutboxMessages.AddRange(
-            new OutboxMessage
+        db.MqttMessages.AddRange(
+            new MqttMessage
             {
                 ProcessingJobId = 2,
+                Direction = "out",
                 Topic = "charts/process/request",
                 Status = "pending",
-                MessageId = "outbox-pending",
+                MessageId = "mqtt-pending",
                 CreatedAt = now.AddMinutes(-6),
             },
-            new OutboxMessage
+            new MqttMessage
             {
                 ProcessingJobId = 3,
+                Direction = "out",
                 Topic = "charts/process/request",
                 Status = "error",
-                MessageId = "outbox-error",
+                MessageId = "mqtt-error",
                 CreatedAt = now.AddMinutes(-5),
                 LastAttemptAt = now.AddMinutes(-1),
                 ErrorMessage = "publish failed",
-            });
-
-        db.InboxMessages.AddRange(
-            new InboxMessage
+            },
+            new MqttMessage
             {
-                MessageId = "inbox-older",
+                Direction = "in",
+                Status = "processed",
+                MessageId = "mqtt-in-older",
                 Topic = "charts/process/accepted",
                 CreatedAt = now.AddMinutes(-4),
             },
-            new InboxMessage
+            new MqttMessage
             {
-                MessageId = "inbox-newer",
+                Direction = "in",
+                Status = "processed",
+                MessageId = "mqtt-in-newer",
                 Topic = "charts/process/completed",
                 CreatedAt = now.AddMinutes(-1),
             });
@@ -84,15 +88,15 @@ public sealed class ProcessingDiagnosticsServiceTests
         Assert.Equal(1, snapshot.StaleProcessingJobCount);
         Assert.Equal(1, snapshot.QueuedReadyJobCount);
         Assert.Equal(1, snapshot.FailedJobCount);
-        Assert.Equal(1, snapshot.PendingOutboxCount);
-        Assert.Equal(1, snapshot.ErrorOutboxCount);
+        Assert.Equal(1, snapshot.PendingMqttMessageCount);
+        Assert.Equal(1, snapshot.ErrorMqttMessageCount);
         Assert.Single(snapshot.StaleProcessingJobs);
         Assert.Single(snapshot.QueuedReadyJobs);
         Assert.Single(snapshot.FailedJobs);
-        Assert.Single(snapshot.PendingOutboxMessages);
-        Assert.Single(snapshot.ErrorOutboxMessages);
-        Assert.Equal(2, snapshot.RecentInboxMessages.Count);
-        Assert.Equal("inbox-newer", snapshot.RecentInboxMessages[0].MessageId);
+        Assert.Single(snapshot.PendingMqttMessages);
+        Assert.Single(snapshot.ErrorMqttMessages);
+        Assert.Equal(2, snapshot.RecentInboundMqttMessages.Count);
+        Assert.Equal("mqtt-in-newer", snapshot.RecentInboundMqttMessages[0].MessageId);
     }
 
     private static TestAppDbContext CreateDbContext()

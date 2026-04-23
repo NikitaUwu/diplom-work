@@ -2,11 +2,13 @@ using System.Text.Json;
 
 namespace DiplomWork.Models;
 
-public sealed class OutboxMessage
+public sealed class MqttMessage
 {
     public long Id { get; set; }
 
     public long? ProcessingJobId { get; set; }
+
+    public string Direction { get; set; } = "out";
 
     public string Topic { get; set; } = string.Empty;
 
@@ -26,5 +28,5 @@ public sealed class OutboxMessage
 
     public DateTimeOffset? AvailableAt { get; set; }
 
-    public DateTimeOffset? PublishedAt { get; set; }
+    public DateTimeOffset? ProcessedAt { get; set; }
 }

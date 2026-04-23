@@ -49,7 +49,7 @@ public sealed class ProcessingJobStateServiceTests
         Assert.Null(actualJob.NextRetryAt);
         Assert.Equal("processing", actualChart.Status);
         Assert.Null(actualChart.ErrorMessage);
-        Assert.Single(db.InboxMessages);
+        Assert.Single(db.MqttMessages.Where(item => item.Direction == "in"));
     }
 
     [Fact]
@@ -91,7 +91,7 @@ public sealed class ProcessingJobStateServiceTests
         Assert.NotNull(previousLease);
         Assert.True(actualJob.LastHeartbeatAt!.Value > previousHeartbeat!.Value);
         Assert.True(actualJob.LeasedUntil!.Value > previousLease!.Value);
-        Assert.Empty(await db.InboxMessages.ToListAsync());
+        Assert.Empty(await db.MqttMessages.Where(item => item.Direction == "in").ToListAsync());
     }
 
     [Fact]
@@ -165,7 +165,7 @@ public sealed class ProcessingJobStateServiceTests
         Assert.Equal(1, actualChart.NPanels);
         Assert.Equal(1, actualChart.NSeries);
         Assert.NotNull(actualChart.ResultJson);
-        Assert.Single(db.InboxMessages);
+        Assert.Single(db.MqttMessages.Where(item => item.Direction == "in"));
     }
 
     [Fact]
@@ -222,7 +222,7 @@ public sealed class ProcessingJobStateServiceTests
 
         var actualJob = await db.ProcessingJobs.SingleAsync();
         var actualChart = await db.Charts.SingleAsync();
-        var outbox = await db.OutboxMessages.SingleAsync();
+        var outbox = await db.MqttMessages.SingleAsync(item => item.Direction == "out");
 
         Assert.Equal(1, processed);
         Assert.Equal("queued", actualJob.Status);
@@ -237,6 +237,7 @@ public sealed class ProcessingJobStateServiceTests
         Assert.Null(actualChart.ErrorMessage);
         Assert.Null(actualChart.ProcessedAt);
         Assert.Equal("pending", outbox.Status);
+        Assert.Equal("out", outbox.Direction);
         Assert.Equal(actualJob.Id, outbox.ProcessingJobId);
         Assert.Equal(actualJob.MessageId, outbox.MessageId);
         Assert.NotNull(outbox.AvailableAt);
@@ -285,7 +286,7 @@ public sealed class ProcessingJobStateServiceTests
         Assert.Equal("request-new", actualJob.MessageId);
         Assert.Null(actualChart.ResultJson);
         Assert.Equal("processing", actualChart.Status);
-        Assert.Single(db.InboxMessages);
+        Assert.Single(db.MqttMessages.Where(item => item.Direction == "in"));
     }
 
     [Fact]
@@ -326,7 +327,7 @@ public sealed class ProcessingJobStateServiceTests
 
         var actualJob = await db.ProcessingJobs.SingleAsync();
         var actualChart = await db.Charts.SingleAsync();
-        var outbox = await db.OutboxMessages.SingleAsync();
+        var outbox = await db.MqttMessages.SingleAsync(item => item.Direction == "out");
 
         Assert.True(applied);
         Assert.Equal("queued", actualJob.Status);
@@ -340,8 +341,9 @@ public sealed class ProcessingJobStateServiceTests
         Assert.Equal("processing", actualChart.Status);
         Assert.Null(actualChart.ErrorMessage);
         Assert.Equal("pending", outbox.Status);
+        Assert.Equal("out", outbox.Direction);
         Assert.Equal(actualJob.MessageId, outbox.MessageId);
-        Assert.Single(db.InboxMessages);
+        Assert.Single(db.MqttMessages.Where(item => item.Direction == "in"));
     }
 
     [Fact]
@@ -389,8 +391,8 @@ public sealed class ProcessingJobStateServiceTests
         Assert.Null(actualJob.NextRetryAt);
         Assert.Equal("error", actualChart.Status);
         Assert.Equal("No series_* points found in data.json", actualChart.ErrorMessage);
-        Assert.Empty(await db.OutboxMessages.ToListAsync());
-        Assert.Single(db.InboxMessages);
+        Assert.Empty(await db.MqttMessages.Where(item => item.Direction == "out").ToListAsync());
+        Assert.Single(db.MqttMessages.Where(item => item.Direction == "in"));
     }
 
     [Fact]
@@ -431,7 +433,7 @@ public sealed class ProcessingJobStateServiceTests
         Assert.True(applied);
         Assert.Equal("error", actualJob.Status);
         Assert.Equal("unexpected_worker_error", actualJob.ErrorCode);
-        Assert.Empty(await db.OutboxMessages.ToListAsync());
+        Assert.Empty(await db.MqttMessages.Where(item => item.Direction == "out").ToListAsync());
     }
 
     [Fact]
@@ -474,7 +476,7 @@ public sealed class ProcessingJobStateServiceTests
         Assert.Equal("queued", actualJob.Status);
         Assert.NotEqual(oldMessageId, actualJob.MessageId);
         Assert.Equal("unexpected_worker_error", actualJob.ErrorCode);
-        Assert.Single(await db.OutboxMessages.ToListAsync());
+        Assert.Single(await db.MqttMessages.Where(item => item.Direction == "out").ToListAsync());
     }
 
     private static ProcessingJobStateService CreateService(

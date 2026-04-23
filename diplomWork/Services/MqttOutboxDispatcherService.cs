@@ -60,8 +60,9 @@ public sealed class MqttOutboxDispatcherService : BackgroundService
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var now = DateTimeOffset.UtcNow;
 
-        var messages = await db.OutboxMessages
-            .Where(item => (item.Status == "pending" || item.Status == "error") &&
+        var messages = await db.MqttMessages
+            .Where(item => item.Direction == "out" &&
+                           (item.Status == "pending" || item.Status == "error") &&
                            (item.AvailableAt == null || item.AvailableAt <= now))
             .OrderBy(item => item.CreatedAt)
             .Take(10)
@@ -85,7 +86,7 @@ public sealed class MqttOutboxDispatcherService : BackgroundService
 
                 message.Status = "published";
                 message.ErrorMessage = null;
-                message.PublishedAt = DateTimeOffset.UtcNow;
+                message.ProcessedAt = DateTimeOffset.UtcNow;
                 message.AvailableAt = null;
 
                 if (message.ProcessingJobId is long processingJobId)

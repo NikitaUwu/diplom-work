@@ -1,40 +1,47 @@
 # Processing Observability
 
-The backend now exposes three operational JSON endpoints:
+The backend currently exposes only the operational endpoints that are backed by the compact database schema and live processing state.
+
+## Active endpoints
 
 - `GET /health`
 - `GET /metrics/processing`
 - `GET /metrics/processing/alerts`
 - `GET /admin/processing/overview`
-- `GET /admin/processing/alerts/history`
 - `GET /admin/processing/diagnostics`
 - `GET /admin/processing/dashboard`
 
-## What each endpoint is for
+## Endpoint purpose
+
+### `/health`
+
+Simple liveness probe:
+
+- returns `{ "status": "ok" }`
 
 ### `/metrics/processing`
 
-High-level counters for:
+Compact machine-readable counters for:
 
 - `processing_jobs` by status
-- `outbox_messages` by status
+- `mqtt_messages` by status
 - `errorCode` distribution
 - retryable vs terminal error jobs
 - queued ready vs delayed jobs
 
-Use it as a compact machine-readable snapshot.
-
 ### `/metrics/processing/alerts`
 
-Derived operational alerts. At the moment the backend raises alerts for:
+Derived operational alerts built from the current database state.
+
+The backend currently raises alerts for:
 
 - stale processing jobs with expired lease
 - queued jobs that stayed ready for too long
-- stale pending outbox messages
-- outbox publish errors
+- stale pending outbound MQTT messages
+- outbound MQTT publish errors
 - recent spikes of failed jobs
 
-Each alert includes:
+Each alert contains:
 
 - `code`
 - `severity`
@@ -44,24 +51,16 @@ Each alert includes:
 
 ### `/admin/processing/diagnostics`
 
-Human-oriented diagnostics snapshot with top problematic records:
+Admin-only human-oriented diagnostics snapshot with top problematic records:
 
 - stale processing jobs
 - queued ready jobs
 - failed jobs
-- pending outbox messages
-- error outbox messages
-- recent inbox messages
+- pending outbound MQTT messages
+- errored outbound MQTT messages
+- recent inbound MQTT messages
 
 This endpoint is intended for fast incident triage without manual SQL.
-
-Admin access rules:
-
-- when `AuthEnabled=false`, diagnostics stays available for the local dev user flow
-- when `AuthEnabled=true` and the current user has `role=admin`, access is allowed
-- `AdminEmails` now acts as bootstrap-only configuration: matching users are promoted to `admin` on startup and on registration
-- when `AuthEnabled=true`, `AdminEmails` is empty, and environment is `Development`, access is allowed for any authenticated user
-- otherwise the endpoint returns `403 Admin access required`
 
 ### `/admin/processing/overview`
 
@@ -72,43 +71,6 @@ Admin-only combined payload that returns:
 - `diagnostics`
 
 Use it when a client or dashboard should read one protected endpoint instead of combining multiple requests.
-It now also includes `recentAlertEvents`, which are produced by the background alert monitor.
-
-### `/admin/processing/alerts/history`
-
-Admin-only recent alert transition history.
-
-The backend stores and returns events such as:
-
-- `activated`
-- `severity_changed`
-- `resolved`
-
-This gives a lightweight incident timeline without an external monitoring stack.
-Each event now also tracks notification delivery state:
-
-- `notificationStatus`
-- `notificationAttemptCount`
-- `lastNotificationAttemptAt`
-- `notificationNextAttemptAt`
-- `notifiedAt`
-- `notificationError`
-
-### `/api/v1/admin/users`
-
-Admin-only user-role management API:
-
-- `GET /api/v1/admin/users`
-- `PATCH /api/v1/admin/users/{userId}/role`
-
-Supported roles:
-
-- `user`
-- `admin`
-
-Safety rule:
-
-- the backend rejects demotion of the last active admin user
 
 ### `/admin/processing/dashboard`
 
@@ -119,67 +81,27 @@ It renders:
 - top-level system snapshot cards
 - operational alerts
 - stale/queued/failed job lists
-- pending/error outbox messages
-- recent inbox messages
-- recent alert transition events
+- pending/error MQTT message lists
+- recent inbound MQTT messages
 
-## Background monitor
+## Removed endpoints
 
-`ProcessingAlertMonitorService` periodically evaluates the current alert snapshot and writes alert transitions
-into `processing_alert_states` and `processing_alert_events`.
+The following routes were removed because they were no longer backed by the compact schema and only returned empty or stubbed responses:
 
-At the moment it records:
+- `GET /admin/processing/alerts/history`
+- `GET /admin/processing/notifier/status`
+- `GET /admin/processing/alerts/{eventId}/preview`
+- `POST /admin/processing/notifier/dispatch`
 
-- first activation of an alert
-- severity changes while the alert stays active
-- resolution of a previously active alert
+The compact schema does not persist alert history or notification queues, so these APIs were intentionally dropped.
 
-## Background notifier
+## Admin access rules
 
-`ProcessingAlertNotifierService` polls `processing_alert_events` with pending or retryable error delivery state
-and sends notifications through configured sinks.
+- when `AuthEnabled=false`, admin-only operational endpoints are available through the local dev user flow
+- when `AuthEnabled=true` and the current user has `role=admin`, access is allowed
+- otherwise the endpoint returns `403 Admin access required`
 
-Current sinks:
-
-- application logs
-- optional webhook via `ProcessingAlertNotifierWebhookUrl`
-
-Webhook formats:
-
-- `json` — canonical machine-readable payload
-- `slack` — Slack-compatible incoming webhook payload with `text` and `blocks`
-
-Canonical JSON webhook payload contains:
-
-- `eventId`
-- `source`
-- `environment`
-- `alertCode`
-- `eventType`
-- `severity`
-- `message`
-- `count`
-- `samples`
-- `createdAt`
-
-Dispatcher behavior:
-
-- successful delivery marks event as `sent`
-- failed delivery marks event as `error`
-- failed delivery is retried after `ProcessingAlertNotifierRetryDelaySeconds`
-- events filtered out by notifier policy are marked as `suppressed`
-- dashboard history shows the current delivery state
-
-Notification policy:
-
-- `ProcessingAlertNotifierMinimumSeverity` sets the minimum severity for delivery
-- `ProcessingAlertNotifierEventTypes` restricts which transition types are delivered
-- `ProcessingAlertNotifierWebhookFormat` chooses `json` or `slack`
-- default configuration keeps current broad behavior: `info` and all current event types
-
-## Config knobs
-
-The following `App` settings control alert sensitivity and payload size:
+## Config knobs still used by the active monitoring flow
 
 - `AdminEmails` (bootstrap only)
 - `ProcessingAlertQueuedReadyAgeSeconds`
@@ -187,21 +109,8 @@ The following `App` settings control alert sensitivity and payload size:
 - `ProcessingAlertRecentFailureWindowMinutes`
 - `ProcessingAlertRecentFailureCountThreshold`
 - `ProcessingDiagnosticsItemLimit`
-- `ProcessingAlertMonitorEnabled`
-- `ProcessingAlertMonitorIntervalSeconds`
-- `ProcessingAlertHistoryItemLimit`
-- `ProcessingAlertNotifierEnabled`
-- `ProcessingAlertNotifierLogEnabled`
-- `ProcessingAlertNotifierSourceName`
-- `ProcessingAlertNotifierMinimumSeverity`
-- `ProcessingAlertNotifierEventTypes`
-- `ProcessingAlertNotifierWebhookFormat`
-- `ProcessingAlertNotifierWebhookUrl`
-- `ProcessingAlertNotifierIntervalSeconds`
-- `ProcessingAlertNotifierRetryDelaySeconds`
-- `ProcessingAlertNotifierBatchSize`
 
 ## Recommended next step
 
-Integrate `/metrics/processing/alerts`, `/admin/processing/overview` or `/admin/processing/alerts/history`
-with external monitoring, tune real alert thresholds from production-like runs, or replace the current email allowlist with полноценные роли пользователей when they appear in the project.
+Integrate `/metrics/processing/alerts`, `/metrics/processing`, or `/admin/processing/overview`
+with external monitoring and tune thresholds based on real runs of the MQTT processing pipeline.

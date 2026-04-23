@@ -7,18 +7,15 @@ public sealed class ProcessingOverviewService
     private readonly ProcessingMetricsService _metricsService;
     private readonly ProcessingAlertsService _alertsService;
     private readonly ProcessingDiagnosticsService _diagnosticsService;
-    private readonly ProcessingAlertHistoryService _alertHistoryService;
 
     public ProcessingOverviewService(
         ProcessingMetricsService metricsService,
         ProcessingAlertsService alertsService,
-        ProcessingDiagnosticsService diagnosticsService,
-        ProcessingAlertHistoryService alertHistoryService)
+        ProcessingDiagnosticsService diagnosticsService)
     {
         _metricsService = metricsService;
         _alertsService = alertsService;
         _diagnosticsService = diagnosticsService;
-        _alertHistoryService = alertHistoryService;
     }
 
     public async Task<ProcessingOverviewResponse> GetSnapshotAsync(CancellationToken cancellationToken = default)
@@ -33,7 +30,6 @@ public sealed class ProcessingOverviewService
             Metrics = metrics,
             Alerts = alerts,
             Diagnostics = diagnostics,
-            RecentAlertEvents = await _alertHistoryService.GetRecentEventsAsync(cancellationToken: cancellationToken),
         };
     }
 }

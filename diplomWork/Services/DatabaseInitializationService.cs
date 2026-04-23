@@ -58,9 +58,10 @@ public sealed class DatabaseInitializationService
             CREATE INDEX IF NOT EXISTS ix_processing_jobs_error_code ON processing_jobs (error_code);
             CREATE UNIQUE INDEX IF NOT EXISTS ix_processing_jobs_message_id ON processing_jobs (message_id);
 
-            CREATE TABLE IF NOT EXISTS outbox_messages (
+            CREATE TABLE IF NOT EXISTS mqtt_messages (
                 id BIGSERIAL PRIMARY KEY,
                 processing_job_id BIGINT NULL,
+                direction VARCHAR(16) NOT NULL DEFAULT 'out',
                 topic VARCHAR(200) NOT NULL,
                 status VARCHAR(32) NOT NULL,
                 payload JSONB NULL,
@@ -70,78 +71,113 @@ public sealed class DatabaseInitializationService
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 last_attempt_at TIMESTAMPTZ NULL,
                 available_at TIMESTAMPTZ NULL,
-                published_at TIMESTAMPTZ NULL
+                processed_at TIMESTAMPTZ NULL
             );
 
-            CREATE INDEX IF NOT EXISTS ix_outbox_messages_status ON outbox_messages (status);
-            CREATE INDEX IF NOT EXISTS ix_outbox_messages_created_at ON outbox_messages (created_at);
-            CREATE INDEX IF NOT EXISTS ix_outbox_messages_available_at ON outbox_messages (available_at);
-            CREATE UNIQUE INDEX IF NOT EXISTS ix_outbox_messages_message_id ON outbox_messages (message_id);
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS processing_job_id BIGINT NULL;
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS direction VARCHAR(16) NOT NULL DEFAULT 'out';
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS topic VARCHAR(200) NOT NULL DEFAULT '';
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'pending';
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS payload JSONB NULL;
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS message_id VARCHAR(100) NULL;
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS error_message TEXT NULL;
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ NULL;
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ NULL;
+            ALTER TABLE IF EXISTS mqtt_messages ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ NULL;
 
-            CREATE TABLE IF NOT EXISTS inbox_messages (
-                id BIGSERIAL PRIMARY KEY,
-                message_id VARCHAR(100) NOT NULL,
-                topic VARCHAR(200) NOT NULL,
-                payload JSONB NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
+            DO $$
+            BEGIN
+                IF to_regclass('public.outbox_messages') IS NOT NULL THEN
+                    EXECUTE $migration$
+                        INSERT INTO mqtt_messages (
+                            processing_job_id,
+                            direction,
+                            topic,
+                            status,
+                            payload,
+                            message_id,
+                            attempt_count,
+                            error_message,
+                            created_at,
+                            last_attempt_at,
+                            available_at,
+                            processed_at
+                        )
+                        SELECT
+                            processing_job_id,
+                            'out',
+                            topic,
+                            status,
+                            payload,
+                            message_id,
+                            attempt_count,
+                            error_message,
+                            created_at,
+                            last_attempt_at,
+                            available_at,
+                            published_at
+                        FROM outbox_messages source
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM mqtt_messages target
+                            WHERE target.direction = 'out'
+                              AND target.message_id IS NOT DISTINCT FROM source.message_id
+                        )
+                    $migration$;
+                END IF;
+            END
+            $$;
 
-            CREATE UNIQUE INDEX IF NOT EXISTS ix_inbox_messages_message_id ON inbox_messages (message_id);
-            CREATE INDEX IF NOT EXISTS ix_inbox_messages_created_at ON inbox_messages (created_at);
+            DO $$
+            BEGIN
+                IF to_regclass('public.inbox_messages') IS NOT NULL THEN
+                    EXECUTE $migration$
+                        INSERT INTO mqtt_messages (
+                            direction,
+                            topic,
+                            status,
+                            payload,
+                            message_id,
+                            created_at,
+                            processed_at
+                        )
+                        SELECT
+                            'in',
+                            topic,
+                            'processed',
+                            payload,
+                            message_id,
+                            created_at,
+                            created_at
+                        FROM inbox_messages source
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM mqtt_messages target
+                            WHERE target.direction = 'in'
+                              AND target.message_id IS NOT DISTINCT FROM source.message_id
+                        )
+                    $migration$;
+                END IF;
+            END
+            $$;
 
-            CREATE TABLE IF NOT EXISTS processing_alert_states (
-                id BIGSERIAL PRIMARY KEY,
-                alert_code VARCHAR(100) NOT NULL,
-                is_active BOOLEAN NOT NULL,
-                severity VARCHAR(32) NOT NULL,
-                message TEXT NOT NULL,
-                last_count INTEGER NOT NULL,
-                samples_text TEXT NULL,
-                first_activated_at TIMESTAMPTZ NULL,
-                last_observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                last_resolved_at TIMESTAMPTZ NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
+            DROP TABLE IF EXISTS processing_alert_events;
+            DROP TABLE IF EXISTS processing_alert_states;
+            DROP TABLE IF EXISTS inbox_messages;
+            DROP TABLE IF EXISTS outbox_messages;
 
-            CREATE UNIQUE INDEX IF NOT EXISTS ix_processing_alert_states_alert_code ON processing_alert_states (alert_code);
-            CREATE INDEX IF NOT EXISTS ix_processing_alert_states_is_active ON processing_alert_states (is_active);
-            CREATE INDEX IF NOT EXISTS ix_processing_alert_states_updated_at ON processing_alert_states (updated_at);
-
-            CREATE TABLE IF NOT EXISTS processing_alert_events (
-                id BIGSERIAL PRIMARY KEY,
-                alert_code VARCHAR(100) NOT NULL,
-                event_type VARCHAR(32) NOT NULL,
-                severity VARCHAR(32) NOT NULL,
-                message TEXT NOT NULL,
-                count INTEGER NOT NULL,
-                samples_text TEXT NULL,
-                notification_status VARCHAR(32) NOT NULL DEFAULT 'pending',
-                notification_attempt_count INTEGER NOT NULL DEFAULT 0,
-                last_notification_attempt_at TIMESTAMPTZ NULL,
-                notification_next_attempt_at TIMESTAMPTZ NULL,
-                notified_at TIMESTAMPTZ NULL,
-                notification_error TEXT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-
-            ALTER TABLE IF EXISTS processing_alert_events ADD COLUMN IF NOT EXISTS notification_status VARCHAR(32) NOT NULL DEFAULT 'pending';
-            ALTER TABLE IF EXISTS processing_alert_events ADD COLUMN IF NOT EXISTS notification_attempt_count INTEGER NOT NULL DEFAULT 0;
-            ALTER TABLE IF EXISTS processing_alert_events ADD COLUMN IF NOT EXISTS last_notification_attempt_at TIMESTAMPTZ NULL;
-            ALTER TABLE IF EXISTS processing_alert_events ADD COLUMN IF NOT EXISTS notification_next_attempt_at TIMESTAMPTZ NULL;
-            ALTER TABLE IF EXISTS processing_alert_events ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ NULL;
-            ALTER TABLE IF EXISTS processing_alert_events ADD COLUMN IF NOT EXISTS notification_error TEXT NULL;
-
-            CREATE INDEX IF NOT EXISTS ix_processing_alert_events_alert_code ON processing_alert_events (alert_code);
-            CREATE INDEX IF NOT EXISTS ix_processing_alert_events_event_type ON processing_alert_events (event_type);
-            CREATE INDEX IF NOT EXISTS ix_processing_alert_events_created_at ON processing_alert_events (created_at);
-            CREATE INDEX IF NOT EXISTS ix_processing_alert_events_notification_status ON processing_alert_events (notification_status);
-            CREATE INDEX IF NOT EXISTS ix_processing_alert_events_notification_next_attempt_at ON processing_alert_events (notification_next_attempt_at);
+            CREATE INDEX IF NOT EXISTS ix_mqtt_messages_processing_job_id ON mqtt_messages (processing_job_id);
+            CREATE INDEX IF NOT EXISTS ix_mqtt_messages_direction ON mqtt_messages (direction);
+            CREATE INDEX IF NOT EXISTS ix_mqtt_messages_status ON mqtt_messages (status);
+            CREATE INDEX IF NOT EXISTS ix_mqtt_messages_created_at ON mqtt_messages (created_at);
+            CREATE INDEX IF NOT EXISTS ix_mqtt_messages_available_at ON mqtt_messages (available_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_mqtt_messages_direction_message_id ON mqtt_messages (direction, message_id);
             """;
 
         await _db.Database.ExecuteSqlRawAsync(sql, cancellationToken);
         await BootstrapAdminRolesAsync(cancellationToken);
-        _logger.LogInformation("Ensured processing orchestration and alert-monitoring tables exist.");
+        _logger.LogInformation("Ensured compact processing orchestration tables exist.");
     }
 
     private async Task BootstrapAdminRolesAsync(CancellationToken cancellationToken)

@@ -59,19 +59,21 @@ public sealed class ProcessingAlertsServiceTests
                 ErrorCode = ProcessingErrorCatalog.Codes.ModalBackendUnavailable,
             });
 
-        db.OutboxMessages.AddRange(
-            new OutboxMessage
+        db.MqttMessages.AddRange(
+            new MqttMessage
             {
+                Direction = "out",
                 Topic = "charts/process/request",
                 Status = "pending",
-                MessageId = "outbox-pending",
+                MessageId = "mqtt-pending",
                 CreatedAt = now.AddMinutes(-5),
             },
-            new OutboxMessage
+            new MqttMessage
             {
+                Direction = "out",
                 Topic = "charts/process/request",
                 Status = "error",
-                MessageId = "outbox-error",
+                MessageId = "mqtt-error",
                 CreatedAt = now.AddMinutes(-4),
                 LastAttemptAt = now.AddMinutes(-1),
                 ErrorMessage = "broker unavailable",

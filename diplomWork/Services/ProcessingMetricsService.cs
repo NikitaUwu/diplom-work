@@ -22,7 +22,7 @@ public sealed class ProcessingMetricsService
         var jobs = await _db.ProcessingJobs
             .AsNoTracking()
             .ToListAsync(cancellationToken);
-        var outbox = await _db.OutboxMessages
+        var mqttMessages = await _db.MqttMessages
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
@@ -30,7 +30,7 @@ public sealed class ProcessingMetricsService
             .GroupBy(item => string.IsNullOrWhiteSpace(item.Status) ? "unknown" : item.Status)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
 
-        var outboxStatusCounts = outbox
+        var mqttStatusCounts = mqttMessages
             .GroupBy(item => string.IsNullOrWhiteSpace(item.Status) ? "unknown" : item.Status)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
 
@@ -55,7 +55,7 @@ public sealed class ProcessingMetricsService
         {
             GeneratedAt = now,
             JobStatusCounts = jobStatusCounts,
-            OutboxStatusCounts = outboxStatusCounts,
+            MqttStatusCounts = mqttStatusCounts,
             ErrorCodeCounts = errorCodeCounts,
             RetryableErrorJobs = retryableErrorJobs,
             TerminalErrorJobs = terminalErrorJobs,

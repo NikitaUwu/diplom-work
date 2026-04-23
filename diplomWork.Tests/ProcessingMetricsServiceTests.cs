@@ -55,10 +55,11 @@ public sealed class ProcessingMetricsServiceTests
                 CreatedAt = now.AddMinutes(-2),
             });
 
-        db.OutboxMessages.AddRange(
-            new OutboxMessage { Topic = "charts/process/request", Status = "pending", MessageId = "outbox-1", CreatedAt = now.AddMinutes(-2) },
-            new OutboxMessage { Topic = "charts/process/request", Status = "published", MessageId = "outbox-2", CreatedAt = now.AddMinutes(-1) },
-            new OutboxMessage { Topic = "charts/process/request", Status = "error", MessageId = "outbox-3", CreatedAt = now.AddMinutes(-1) });
+        db.MqttMessages.AddRange(
+            new MqttMessage { Direction = "out", Topic = "charts/process/request", Status = "pending", MessageId = "mqtt-1", CreatedAt = now.AddMinutes(-2) },
+            new MqttMessage { Direction = "out", Topic = "charts/process/request", Status = "published", MessageId = "mqtt-2", CreatedAt = now.AddMinutes(-1) },
+            new MqttMessage { Direction = "in", Topic = "charts/process/completed", Status = "processed", MessageId = "mqtt-3", CreatedAt = now.AddMinutes(-1) },
+            new MqttMessage { Direction = "out", Topic = "charts/process/request", Status = "error", MessageId = "mqtt-4", CreatedAt = now.AddMinutes(-1) });
 
         await db.SaveChangesAsync();
 
@@ -69,9 +70,10 @@ public sealed class ProcessingMetricsServiceTests
         Assert.Equal(2, snapshot.JobStatusCounts["queued"]);
         Assert.Equal(2, snapshot.JobStatusCounts["error"]);
         Assert.Equal(1, snapshot.JobStatusCounts["processing"]);
-        Assert.Equal(1, snapshot.OutboxStatusCounts["pending"]);
-        Assert.Equal(1, snapshot.OutboxStatusCounts["published"]);
-        Assert.Equal(1, snapshot.OutboxStatusCounts["error"]);
+        Assert.Equal(1, snapshot.MqttStatusCounts["pending"]);
+        Assert.Equal(1, snapshot.MqttStatusCounts["published"]);
+        Assert.Equal(1, snapshot.MqttStatusCounts["processed"]);
+        Assert.Equal(1, snapshot.MqttStatusCounts["error"]);
         Assert.Equal(2, snapshot.ErrorCodeCounts[ProcessingErrorCatalog.Codes.ModalBackendUnavailable]);
         Assert.Equal(1, snapshot.ErrorCodeCounts[ProcessingErrorCatalog.Codes.PipelineOutputInvalid]);
         Assert.Equal(2, snapshot.RetryableErrorJobs);

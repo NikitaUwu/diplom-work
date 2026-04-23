@@ -65,23 +65,14 @@ builder.Services.AddSingleton<EditorOverlayService>();
 builder.Services.AddScoped<DatabaseInitializationService>();
 builder.Services.AddScoped<ProcessingJobStateService>();
 builder.Services.AddScoped<ProcessingAlertsService>();
-builder.Services.AddScoped<ProcessingAlertHistoryService>();
-builder.Services.AddScoped<ProcessingAlertNotificationPolicyService>();
-builder.Services.AddScoped<ProcessingAlertNotifierAdminService>();
-builder.Services.AddScoped<ProcessingAlertNotificationDispatcherService>();
 builder.Services.AddScoped<ProcessingMetricsService>();
 builder.Services.AddScoped<ProcessingDiagnosticsService>();
 builder.Services.AddScoped<ProcessingOverviewService>();
 builder.Services.AddSingleton<ProcessingDashboardPageService>();
-builder.Services.AddSingleton<ProcessingAlertNotificationSender>();
-builder.Services.AddSingleton<IProcessingAlertNotificationSender>(serviceProvider =>
-    serviceProvider.GetRequiredService<ProcessingAlertNotificationSender>());
 builder.Services.AddSingleton<MqttPublisherService>();
 builder.Services.AddHostedService<MqttOutboxDispatcherService>();
 builder.Services.AddHostedService<MqttProcessingConsumerService>();
 builder.Services.AddHostedService<ProcessingLeaseMonitorService>();
-builder.Services.AddHostedService<ProcessingAlertMonitorService>();
-builder.Services.AddHostedService<ProcessingAlertNotifierService>();
 builder.Services.AddScoped<ChartApiService>();
 
 var app = builder.Build();
@@ -131,31 +122,6 @@ app.MapGet("/admin/processing/overview", async (HttpContext httpContext, AdminAc
 {
     await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
     return Results.Json(await overviewService.GetSnapshotAsync(cancellationToken));
-});
-app.MapGet("/admin/processing/alerts/history", async (HttpContext httpContext, AdminAccessService adminAccessService, ProcessingAlertHistoryService alertHistoryService, CancellationToken cancellationToken) =>
-{
-    await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
-    return Results.Json(await alertHistoryService.GetRecentEventsAsync(cancellationToken: cancellationToken));
-});
-app.MapGet("/admin/processing/notifier/status", async (HttpContext httpContext, AdminAccessService adminAccessService, ProcessingAlertNotifierAdminService notifierAdminService, CancellationToken cancellationToken) =>
-{
-    await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
-    return Results.Json(await notifierAdminService.GetStatusAsync(cancellationToken));
-});
-app.MapGet("/admin/processing/alerts/{eventId:long}/preview", async (HttpContext httpContext, long eventId, AdminAccessService adminAccessService, ProcessingAlertNotifierAdminService notifierAdminService, CancellationToken cancellationToken) =>
-{
-    await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
-    return Results.Json(await notifierAdminService.GetPreviewAsync(eventId, cancellationToken));
-});
-app.MapPost("/admin/processing/notifier/dispatch", async (HttpContext httpContext, AdminAccessService adminAccessService, ProcessingAlertNotificationDispatcherService dispatcherService, CancellationToken cancellationToken) =>
-{
-    await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
-    var dispatchedCount = await dispatcherService.DispatchPendingAsync(cancellationToken);
-    return Results.Json(new ProcessingAlertDispatchResponse
-    {
-        GeneratedAt = DateTimeOffset.UtcNow,
-        DispatchedCount = dispatchedCount,
-    });
 });
 app.MapGet("/admin/processing/diagnostics", async (HttpContext httpContext, AdminAccessService adminAccessService, ProcessingDiagnosticsService diagnosticsService, CancellationToken cancellationToken) =>
 {

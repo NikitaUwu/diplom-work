@@ -33,13 +33,13 @@ public sealed class ProcessingDiagnosticsService
             .AsNoTracking()
             .Where(item => item.Status == "error");
 
-        var pendingOutboxQuery = _db.OutboxMessages
+        var pendingMqttQuery = _db.MqttMessages
             .AsNoTracking()
-            .Where(item => item.Status == "pending" && (item.AvailableAt == null || item.AvailableAt <= now));
+            .Where(item => item.Direction == "out" && item.Status == "pending" && (item.AvailableAt == null || item.AvailableAt <= now));
 
-        var errorOutboxQuery = _db.OutboxMessages
+        var errorMqttQuery = _db.MqttMessages
             .AsNoTracking()
-            .Where(item => item.Status == "error");
+            .Where(item => item.Direction == "out" && item.Status == "error");
 
         return new ProcessingDiagnosticsResponse
         {
@@ -48,8 +48,8 @@ public sealed class ProcessingDiagnosticsService
             StaleProcessingJobCount = await staleProcessingQuery.CountAsync(cancellationToken),
             QueuedReadyJobCount = await queuedReadyQuery.CountAsync(cancellationToken),
             FailedJobCount = await failedJobsQuery.CountAsync(cancellationToken),
-            PendingOutboxCount = await pendingOutboxQuery.CountAsync(cancellationToken),
-            ErrorOutboxCount = await errorOutboxQuery.CountAsync(cancellationToken),
+            PendingMqttMessageCount = await pendingMqttQuery.CountAsync(cancellationToken),
+            ErrorMqttMessageCount = await errorMqttQuery.CountAsync(cancellationToken),
             StaleProcessingJobs = await staleProcessingQuery
                 .OrderBy(item => item.LeasedUntil)
                 .Take(itemLimit)
@@ -65,27 +65,22 @@ public sealed class ProcessingDiagnosticsService
                 .Take(itemLimit)
                 .Select(MapProcessingJob())
                 .ToListAsync(cancellationToken),
-            PendingOutboxMessages = await pendingOutboxQuery
+            PendingMqttMessages = await pendingMqttQuery
                 .OrderBy(item => item.AvailableAt ?? item.CreatedAt)
                 .Take(itemLimit)
-                .Select(MapOutboxMessage())
+                .Select(MapMqttMessage())
                 .ToListAsync(cancellationToken),
-            ErrorOutboxMessages = await errorOutboxQuery
+            ErrorMqttMessages = await errorMqttQuery
                 .OrderByDescending(item => item.LastAttemptAt ?? item.CreatedAt)
                 .Take(itemLimit)
-                .Select(MapOutboxMessage())
+                .Select(MapMqttMessage())
                 .ToListAsync(cancellationToken),
-            RecentInboxMessages = await _db.InboxMessages
+            RecentInboundMqttMessages = await _db.MqttMessages
                 .AsNoTracking()
+                .Where(item => item.Direction == "in")
                 .OrderByDescending(item => item.CreatedAt)
                 .Take(itemLimit)
-                .Select(item => new InboxDiagnosticItem
-                {
-                    Id = item.Id,
-                    MessageId = item.MessageId,
-                    Topic = item.Topic,
-                    CreatedAt = item.CreatedAt,
-                })
+                .Select(MapMqttMessage())
                 .ToListAsync(cancellationToken),
         };
     }
@@ -109,11 +104,12 @@ public sealed class ProcessingDiagnosticsService
             FinishedAt = item.FinishedAt,
         };
 
-    private static System.Linq.Expressions.Expression<Func<Models.OutboxMessage, OutboxDiagnosticItem>> MapOutboxMessage() =>
-        item => new OutboxDiagnosticItem
+    private static System.Linq.Expressions.Expression<Func<Models.MqttMessage, MqttDiagnosticItem>> MapMqttMessage() =>
+        item => new MqttDiagnosticItem
         {
             Id = item.Id,
             ProcessingJobId = item.ProcessingJobId,
+            Direction = item.Direction,
             Topic = item.Topic,
             Status = item.Status,
             MessageId = item.MessageId,
@@ -122,6 +118,6 @@ public sealed class ProcessingDiagnosticsService
             CreatedAt = item.CreatedAt,
             LastAttemptAt = item.LastAttemptAt,
             AvailableAt = item.AvailableAt,
-            PublishedAt = item.PublishedAt,
+            ProcessedAt = item.ProcessedAt,
         };
 }

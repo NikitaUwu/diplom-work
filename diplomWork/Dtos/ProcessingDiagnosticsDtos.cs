@@ -34,9 +34,9 @@ public sealed class ProcessingDiagnosticsResponse
 
     public int FailedJobCount { get; set; }
 
-    public int PendingOutboxCount { get; set; }
+    public int PendingMqttMessageCount { get; set; }
 
-    public int ErrorOutboxCount { get; set; }
+    public int ErrorMqttMessageCount { get; set; }
 
     public List<ProcessingJobDiagnosticItem> StaleProcessingJobs { get; set; } = [];
 
@@ -44,11 +44,11 @@ public sealed class ProcessingDiagnosticsResponse
 
     public List<ProcessingJobDiagnosticItem> FailedJobs { get; set; } = [];
 
-    public List<OutboxDiagnosticItem> PendingOutboxMessages { get; set; } = [];
+    public List<MqttDiagnosticItem> PendingMqttMessages { get; set; } = [];
 
-    public List<OutboxDiagnosticItem> ErrorOutboxMessages { get; set; } = [];
+    public List<MqttDiagnosticItem> ErrorMqttMessages { get; set; } = [];
 
-    public List<InboxDiagnosticItem> RecentInboxMessages { get; set; } = [];
+    public List<MqttDiagnosticItem> RecentInboundMqttMessages { get; set; } = [];
 }
 
 public sealed class ProcessingJobDiagnosticItem
@@ -82,11 +82,13 @@ public sealed class ProcessingJobDiagnosticItem
     public DateTimeOffset? FinishedAt { get; set; }
 }
 
-public sealed class OutboxDiagnosticItem
+public sealed class MqttDiagnosticItem
 {
     public long Id { get; set; }
 
     public long? ProcessingJobId { get; set; }
+
+    public string Direction { get; set; } = string.Empty;
 
     public string Topic { get; set; } = string.Empty;
 
@@ -104,16 +106,5 @@ public sealed class OutboxDiagnosticItem
 
     public DateTimeOffset? AvailableAt { get; set; }
 
-    public DateTimeOffset? PublishedAt { get; set; }
-}
-
-public sealed class InboxDiagnosticItem
-{
-    public long Id { get; set; }
-
-    public string MessageId { get; set; } = string.Empty;
-
-    public string Topic { get; set; } = string.Empty;
-
-    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? ProcessedAt { get; set; }
 }

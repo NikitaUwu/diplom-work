@@ -41,30 +41,22 @@ public sealed class ProcessingOverviewServiceTests
                 ErrorCode = ProcessingErrorCatalog.Codes.PipelineOutputInvalid,
             });
 
-        db.OutboxMessages.Add(new OutboxMessage
+        db.MqttMessages.Add(new MqttMessage
         {
+            Direction = "out",
             Topic = "charts/process/request",
             Status = "pending",
-            MessageId = "outbox-pending",
+            MessageId = "mqtt-pending",
             CreatedAt = now.AddMinutes(-3),
         });
 
-        db.InboxMessages.Add(new InboxMessage
+        db.MqttMessages.Add(new MqttMessage
         {
-            MessageId = "inbox-1",
+            Direction = "in",
+            Status = "processed",
+            MessageId = "mqtt-in-1",
             Topic = "charts/process/accepted",
             CreatedAt = now.AddMinutes(-1),
-        });
-
-        db.ProcessingAlertEvents.Add(new ProcessingAlertEvent
-        {
-            AlertCode = "stale_processing_jobs",
-            EventType = "activated",
-            Severity = "critical",
-            Message = "lease expired",
-            Count = 1,
-            SamplesText = "job:2",
-            CreatedAt = now.AddSeconds(-30),
         });
 
         await db.SaveChangesAsync();
@@ -73,18 +65,15 @@ public sealed class ProcessingOverviewServiceTests
         var overviewService = new ProcessingOverviewService(
             new ProcessingMetricsService(db, options),
             new ProcessingAlertsService(db, options),
-            new ProcessingDiagnosticsService(db, options),
-            new ProcessingAlertHistoryService(db, options));
+            new ProcessingDiagnosticsService(db, options));
 
         var snapshot = await overviewService.GetSnapshotAsync();
 
         Assert.Equal(1, snapshot.Metrics.JobStatusCounts["queued"]);
         Assert.False(snapshot.Alerts.IsHealthy);
         Assert.Equal(1, snapshot.Diagnostics.StaleProcessingJobCount);
-        Assert.Equal(1, snapshot.Diagnostics.PendingOutboxCount);
-        Assert.Single(snapshot.Diagnostics.RecentInboxMessages);
-        Assert.Single(snapshot.RecentAlertEvents);
-        Assert.Equal("activated", snapshot.RecentAlertEvents[0].EventType);
+        Assert.Equal(1, snapshot.Diagnostics.PendingMqttMessageCount);
+        Assert.Single(snapshot.Diagnostics.RecentInboundMqttMessages);
     }
 
     private static TestAppDbContext CreateDbContext()

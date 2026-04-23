@@ -13,15 +13,15 @@ public sealed class ProcessingDashboardPageServiceTests
         var html = service.Render();
 
         Assert.Contains("/admin/processing/overview", html);
-        Assert.Contains("/admin/processing/notifier/status", html);
-        Assert.Contains("/admin/processing/notifier/dispatch", html);
-        Assert.Contains("/admin/processing/alerts/", html);
         Assert.Contains("Processing Dashboard", html);
         Assert.Contains("Operational Alerts", html);
         Assert.Contains("Diagnostics", html);
-        Assert.Contains("Recent Alert Events", html);
-        Assert.Contains("Payload Preview", html);
-        Assert.Contains("Dispatch Pending Now", html);
         Assert.Contains("Auto-refresh every 15s", html);
+        Assert.DoesNotContain("/admin/processing/notifier/status", html);
+        Assert.DoesNotContain("/admin/processing/notifier/dispatch", html);
+        Assert.DoesNotContain("/admin/processing/alerts/", html);
+        Assert.DoesNotContain("Recent Alert Events", html);
+        Assert.DoesNotContain("Payload Preview", html);
+        Assert.DoesNotContain("Dispatch Pending Now", html);
     }
 }

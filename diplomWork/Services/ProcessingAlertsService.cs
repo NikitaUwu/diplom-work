@@ -74,19 +74,19 @@ public sealed class ProcessingAlertsService
         }
 
         var outboxPendingCutoff = now.AddSeconds(-_options.ProcessingAlertOutboxPendingAgeSeconds);
-        var staleOutboxPendingCount = await _db.OutboxMessages
+        var staleOutboxPendingCount = await _db.MqttMessages
             .AsNoTracking()
-            .Where(item => item.Status == "pending" && (item.AvailableAt ?? item.CreatedAt) <= outboxPendingCutoff)
+            .Where(item => item.Direction == "out" && item.Status == "pending" && (item.AvailableAt ?? item.CreatedAt) <= outboxPendingCutoff)
             .CountAsync(cancellationToken);
 
         if (staleOutboxPendingCount > 0)
         {
-            var samples = await _db.OutboxMessages
+            var samples = await _db.MqttMessages
                 .AsNoTracking()
-                .Where(item => item.Status == "pending" && (item.AvailableAt ?? item.CreatedAt) <= outboxPendingCutoff)
+                .Where(item => item.Direction == "out" && item.Status == "pending" && (item.AvailableAt ?? item.CreatedAt) <= outboxPendingCutoff)
                 .OrderBy(item => item.AvailableAt ?? item.CreatedAt)
                 .Take(itemLimit)
-                .Select(item => $"outbox:{item.Id}")
+                .Select(item => $"mqtt:{item.Id}")
                 .ToListAsync(cancellationToken);
 
             alerts.Add(new ProcessingAlertItem
@@ -99,19 +99,19 @@ public sealed class ProcessingAlertsService
             });
         }
 
-        var outboxErrorCount = await _db.OutboxMessages
+        var outboxErrorCount = await _db.MqttMessages
             .AsNoTracking()
-            .Where(item => item.Status == "error")
+            .Where(item => item.Direction == "out" && item.Status == "error")
             .CountAsync(cancellationToken);
 
         if (outboxErrorCount > 0)
         {
-            var samples = await _db.OutboxMessages
+            var samples = await _db.MqttMessages
                 .AsNoTracking()
-                .Where(item => item.Status == "error")
+                .Where(item => item.Direction == "out" && item.Status == "error")
                 .OrderByDescending(item => item.LastAttemptAt ?? item.CreatedAt)
                 .Take(itemLimit)
-                .Select(item => $"outbox:{item.Id}")
+                .Select(item => $"mqtt:{item.Id}")
                 .ToListAsync(cancellationToken);
 
             alerts.Add(new ProcessingAlertItem

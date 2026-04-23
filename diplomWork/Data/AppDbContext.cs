@@ -13,10 +13,7 @@ public class AppDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<Chart> Charts => Set<Chart>();
     public DbSet<ProcessingJob> ProcessingJobs => Set<ProcessingJob>();
-    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
-    public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
-    public DbSet<ProcessingAlertState> ProcessingAlertStates => Set<ProcessingAlertState>();
-    public DbSet<ProcessingAlertEvent> ProcessingAlertEvents => Set<ProcessingAlertEvent>();
+    public DbSet<MqttMessage> MqttMessages => Set<MqttMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -88,17 +85,20 @@ public class AppDbContext : DbContext
             entity.Property(item => item.FinishedAt).HasColumnName("finished_at");
         });
 
-        modelBuilder.Entity<OutboxMessage>(entity =>
+        modelBuilder.Entity<MqttMessage>(entity =>
         {
-            entity.ToTable("outbox_messages");
+            entity.ToTable("mqtt_messages");
             entity.HasKey(item => item.Id);
+            entity.HasIndex(item => item.ProcessingJobId);
+            entity.HasIndex(item => item.Direction);
             entity.HasIndex(item => item.Status);
             entity.HasIndex(item => item.CreatedAt);
             entity.HasIndex(item => item.AvailableAt);
-            entity.HasIndex(item => item.MessageId).IsUnique();
+            entity.HasIndex(item => new { item.Direction, item.MessageId }).IsUnique();
 
             entity.Property(item => item.Id).HasColumnName("id").ValueGeneratedOnAdd();
             entity.Property(item => item.ProcessingJobId).HasColumnName("processing_job_id");
+            entity.Property(item => item.Direction).HasColumnName("direction").HasMaxLength(16).IsRequired();
             entity.Property(item => item.Topic).HasColumnName("topic").HasMaxLength(200).IsRequired();
             entity.Property(item => item.Status).HasColumnName("status").HasMaxLength(32).IsRequired();
             entity.Property(item => item.Payload).HasColumnName("payload").HasColumnType("jsonb");
@@ -108,69 +108,7 @@ public class AppDbContext : DbContext
             entity.Property(item => item.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("now()");
             entity.Property(item => item.LastAttemptAt).HasColumnName("last_attempt_at");
             entity.Property(item => item.AvailableAt).HasColumnName("available_at");
-            entity.Property(item => item.PublishedAt).HasColumnName("published_at");
-        });
-
-        modelBuilder.Entity<InboxMessage>(entity =>
-        {
-            entity.ToTable("inbox_messages");
-            entity.HasKey(item => item.Id);
-            entity.HasIndex(item => item.MessageId).IsUnique();
-            entity.HasIndex(item => item.CreatedAt);
-
-            entity.Property(item => item.Id).HasColumnName("id").ValueGeneratedOnAdd();
-            entity.Property(item => item.MessageId).HasColumnName("message_id").HasMaxLength(100).IsRequired();
-            entity.Property(item => item.Topic).HasColumnName("topic").HasMaxLength(200).IsRequired();
-            entity.Property(item => item.Payload).HasColumnName("payload").HasColumnType("jsonb");
-            entity.Property(item => item.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("now()");
-        });
-
-        modelBuilder.Entity<ProcessingAlertState>(entity =>
-        {
-            entity.ToTable("processing_alert_states");
-            entity.HasKey(item => item.Id);
-            entity.HasIndex(item => item.AlertCode).IsUnique();
-            entity.HasIndex(item => item.IsActive);
-            entity.HasIndex(item => item.UpdatedAt);
-
-            entity.Property(item => item.Id).HasColumnName("id").ValueGeneratedOnAdd();
-            entity.Property(item => item.AlertCode).HasColumnName("alert_code").HasMaxLength(100).IsRequired();
-            entity.Property(item => item.IsActive).HasColumnName("is_active").IsRequired();
-            entity.Property(item => item.Severity).HasColumnName("severity").HasMaxLength(32).IsRequired();
-            entity.Property(item => item.Message).HasColumnName("message").IsRequired();
-            entity.Property(item => item.LastCount).HasColumnName("last_count").IsRequired();
-            entity.Property(item => item.SamplesText).HasColumnName("samples_text");
-            entity.Property(item => item.FirstActivatedAt).HasColumnName("first_activated_at");
-            entity.Property(item => item.LastObservedAt).HasColumnName("last_observed_at").IsRequired();
-            entity.Property(item => item.LastResolvedAt).HasColumnName("last_resolved_at");
-            entity.Property(item => item.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("now()");
-            entity.Property(item => item.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("now()");
-        });
-
-        modelBuilder.Entity<ProcessingAlertEvent>(entity =>
-        {
-            entity.ToTable("processing_alert_events");
-            entity.HasKey(item => item.Id);
-            entity.HasIndex(item => item.AlertCode);
-            entity.HasIndex(item => item.EventType);
-            entity.HasIndex(item => item.CreatedAt);
-            entity.HasIndex(item => item.NotificationStatus);
-            entity.HasIndex(item => item.NotificationNextAttemptAt);
-
-            entity.Property(item => item.Id).HasColumnName("id").ValueGeneratedOnAdd();
-            entity.Property(item => item.AlertCode).HasColumnName("alert_code").HasMaxLength(100).IsRequired();
-            entity.Property(item => item.EventType).HasColumnName("event_type").HasMaxLength(32).IsRequired();
-            entity.Property(item => item.Severity).HasColumnName("severity").HasMaxLength(32).IsRequired();
-            entity.Property(item => item.Message).HasColumnName("message").IsRequired();
-            entity.Property(item => item.Count).HasColumnName("count").IsRequired();
-            entity.Property(item => item.SamplesText).HasColumnName("samples_text");
-            entity.Property(item => item.NotificationStatus).HasColumnName("notification_status").HasMaxLength(32).HasDefaultValue("pending");
-            entity.Property(item => item.NotificationAttemptCount).HasColumnName("notification_attempt_count").HasDefaultValue(0);
-            entity.Property(item => item.LastNotificationAttemptAt).HasColumnName("last_notification_attempt_at");
-            entity.Property(item => item.NotificationNextAttemptAt).HasColumnName("notification_next_attempt_at");
-            entity.Property(item => item.NotifiedAt).HasColumnName("notified_at");
-            entity.Property(item => item.NotificationError).HasColumnName("notification_error");
-            entity.Property(item => item.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("now()");
+            entity.Property(item => item.ProcessedAt).HasColumnName("processed_at");
         });
     }
 }

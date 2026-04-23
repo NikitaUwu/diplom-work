@@ -24,8 +24,7 @@ internal sealed class TestAppDbContext : AppDbContext
         modelBuilder.Entity<Chart>().Property(item => item.ResultJson).HasConversion(jsonConverter);
         modelBuilder.Entity<ProcessingJob>().Property(item => item.RequestPayload).HasConversion(jsonConverter);
         modelBuilder.Entity<ProcessingJob>().Property(item => item.ResultPayload).HasConversion(jsonConverter);
-        modelBuilder.Entity<OutboxMessage>().Property(item => item.Payload).HasConversion(jsonConverter);
-        modelBuilder.Entity<InboxMessage>().Property(item => item.Payload).HasConversion(jsonConverter);
+        modelBuilder.Entity<MqttMessage>().Property(item => item.Payload).HasConversion(jsonConverter);
     }
 
     private static string? SerializeJsonDocument(JsonDocument? value) =>

@@ -288,9 +288,10 @@ public sealed class ProcessingJobStateService
         job.ResultPayload = null;
         job.RequestPayload = requestDocument;
 
-        _db.OutboxMessages.Add(new OutboxMessage
+        _db.MqttMessages.Add(new MqttMessage
         {
             ProcessingJobId = job.Id,
+            Direction = "out",
             Topic = _options.MqttProcessRequestTopic,
             Status = "pending",
             Payload = requestDocument is null ? null : JsonDocument.Parse(requestDocument.RootElement.GetRawText()),
@@ -403,18 +404,23 @@ public sealed class ProcessingJobStateService
             return true;
         }
 
-        var exists = await _db.InboxMessages.AnyAsync(item => item.MessageId == payload.MessageId, cancellationToken);
+        var exists = await _db.MqttMessages.AnyAsync(
+            item => item.Direction == "in" && item.MessageId == payload.MessageId,
+            cancellationToken);
         if (exists)
         {
             _logger.LogDebug("MQTT event {MessageId} already processed.", payload.MessageId);
             return false;
         }
 
-        _db.InboxMessages.Add(new InboxMessage
+        _db.MqttMessages.Add(new MqttMessage
         {
             MessageId = payload.MessageId,
+            Direction = "in",
             Topic = topic,
+            Status = "processed",
             Payload = JsonHelpers.ToDocument(payloadNode),
+            ProcessedAt = DateTimeOffset.UtcNow,
         });
 
         return true;
@@ -542,7 +548,7 @@ public sealed class ProcessingJobStateService
             return false;
         }
 
-        return ex.InnerException?.Message?.Contains("ix_inbox_messages_message_id", StringComparison.OrdinalIgnoreCase) == true
-            || ex.Message.Contains("ix_inbox_messages_message_id", StringComparison.OrdinalIgnoreCase);
+        return ex.InnerException?.Message?.Contains("ix_mqtt_messages_direction_message_id", StringComparison.OrdinalIgnoreCase) == true
+            || ex.Message.Contains("ix_mqtt_messages_direction_message_id", StringComparison.OrdinalIgnoreCase);
     }
 }

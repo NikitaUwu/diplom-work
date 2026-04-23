@@ -45,3 +45,9 @@ ml-worker/data/
 ml-worker/output/
 ml-worker/outputs/
 ml-worker/extract-line-chart-data/examples/output/
+
+# Local Mosquitto runtime data
+infra/mosquitto/data/*
+infra/mosquitto/log/*
+!infra/mosquitto/data/.gitkeep
+!infra/mosquitto/log/.gitkeep

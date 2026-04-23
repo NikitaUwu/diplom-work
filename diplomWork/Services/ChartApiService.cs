@@ -440,9 +440,10 @@ public sealed class ChartApiService
             ["storageRoot"] = _storageService.StorageRoot,
         };
 
-        var outboxMessage = new OutboxMessage
+        var outboxMessage = new MqttMessage
         {
             ProcessingJobId = processingJob.Id,
+            Direction = "out",
             Topic = _options.MqttProcessRequestTopic,
             Status = "pending",
             Payload = JsonHelpers.ToDocument(payload),
@@ -450,7 +451,7 @@ public sealed class ChartApiService
             AvailableAt = processingJob.NextRetryAt ?? DateTimeOffset.UtcNow,
         };
 
-        _db.OutboxMessages.Add(outboxMessage);
+        _db.MqttMessages.Add(outboxMessage);
         await _db.SaveChangesAsync(cancellationToken);
     }
 }

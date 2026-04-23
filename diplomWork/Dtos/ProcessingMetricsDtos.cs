@@ -6,7 +6,7 @@ public sealed class ProcessingMetricsResponse
 
     public Dictionary<string, int> JobStatusCounts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public Dictionary<string, int> OutboxStatusCounts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, int> MqttStatusCounts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public Dictionary<string, int> ErrorCodeCounts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 

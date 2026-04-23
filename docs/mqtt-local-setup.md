@@ -1,72 +1,95 @@
-# Локальный запуск MQTT для backend и ml-worker
+# Локальный MQTT через Mosquitto
 
-## Что уже работает
+В проекте MQTT используется как транспорт между backend и ML-worker. Конкретная реализация брокера теперь зафиксирована как Mosquitto.
 
-- `.NET backend` после загрузки графика создает `processing_jobs` и кладет команду в `outbox_messages`.
-- `MqttOutboxDispatcherService` публикует `charts/process/request` в MQTT.
-- `ml-worker` в MQTT-режиме слушает `charts/process/request`, публикует:
-  - `charts/process/accepted`
-  - `charts/process/heartbeat`
-  - `charts/process/completed`
-  - `charts/process/failed`
-- `charts/process/failed` теперь может нести `errorCode` и `retryable`, чтобы backend различал временные и terminal ошибки worker.
-- Актуальный каталог кодов описан в [processing-error-codes.md](C:\Users\nikit\Documents\New project\diplomWork-stage\docs\processing-error-codes.md).
-- `.NET backend` принимает эти события, идемпотентно применяет terminal-события через `inbox_messages` и поддерживает lease по `processing_jobs`.
-- `ProcessingLeaseMonitorService` при истечении lease:
-  - переочередит job через `outbox_messages`, если лимит попыток еще не исчерпан;
-  - пометит job как `error`, если попытки закончились.
+## Схема
 
-## Что нужно установить
+```text
+Backend (.NET 8)
+  -> mqtt_messages direction=out
+  -> Mosquitto topic charts/process/request
+  -> ML-worker
+  -> Mosquitto topics accepted/heartbeat/completed/failed
+  -> Backend
+  -> mqtt_messages direction=in
+```
 
-### 1. MQTT broker
+Backend остается источником истины: статусы задач хранятся в PostgreSQL, а MQTT только доставляет команды и события.
 
-Самый простой локальный вариант для Windows: Mosquitto.
+## Файлы Mosquitto
 
-Параметры по умолчанию:
+| Файл | Назначение |
+|---|---|
+| `docker-compose.mqtt.yml` | Запуск Mosquitto через Docker Compose. |
+| `infra/mosquitto/config/mosquitto.conf` | Конфигурация брокера. |
+| `infra/mosquitto/data` | Локальная persistence-директория Mosquitto. |
+| `infra/mosquitto/log` | Локальные логи Mosquitto. |
+| `scripts/start-mosquitto.ps1` | Удобный PowerShell-скрипт запуска брокера. |
 
-- host: `localhost`
-- port: `1883`
+## Запуск через Docker
 
-### 2. Python-зависимости
-
-В `requirements.txt` уже есть `paho-mqtt==1.6.1`.
-
-Обновление зависимостей:
+Из корня проекта:
 
 ```powershell
-cd C:\Users\nikit\source\repos\diplomWork
-.\ml-worker\.venv\Scripts\python.exe -m pip install -r .\requirements.txt
+.\scripts\start-mosquitto.ps1
 ```
 
-## Как включить MQTT
+В фоне:
 
-### Backend
+```powershell
+.\scripts\start-mosquitto.ps1 -Detached
+```
 
-В `diplomWork/appsettings.Development.json`:
+Если PowerShell блокирует запуск `.ps1` из-за ExecutionPolicy, используй команду с локальным обходом политики только для этого запуска:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-mosquitto.ps1 -Detached
+```
+
+Альтернативно напрямую:
+
+```powershell
+docker compose -f .\docker-compose.mqtt.yml up
+```
+
+Остановка:
+
+```powershell
+docker compose -f .\docker-compose.mqtt.yml down
+```
+
+## Настройки backend
+
+В `diplomWork/appsettings.Development.json` или через переменные окружения:
 
 ```json
-"MqttEnabled": true,
-"MqttHost": "localhost",
-"MqttPort": 1883,
-"MqttClientIdPrefix": "diplom-backend",
-"MqttProcessRequestTopic": "charts/process/request",
-"MqttProcessAcceptedTopic": "charts/process/accepted",
-"MqttProcessHeartbeatTopic": "charts/process/heartbeat",
-"MqttProcessCompletedTopic": "charts/process/completed",
-"MqttProcessFailedTopic": "charts/process/failed",
-"ProcessingLeaseSeconds": 45,
-"ProcessingLeaseMonitorIntervalSeconds": 10,
-"ProcessingMaxAttempts": 3,
-"ProcessingRetryDelaySeconds": 15,
-"ProcessingRetryModalBackendUnavailableMaxAttempts": 5,
-"ProcessingRetryModalBackendUnavailableDelaySeconds": 20,
-"ProcessingRetryNetworkTimeoutMaxAttempts": 4,
-"ProcessingRetryNetworkTimeoutDelaySeconds": 10
+{
+  "App": {
+    "MqttEnabled": true,
+    "MqttHost": "localhost",
+    "MqttPort": 1883,
+    "MqttClientIdPrefix": "diplom-backend",
+    "MqttProcessRequestTopic": "charts/process/request",
+    "MqttProcessAcceptedTopic": "charts/process/accepted",
+    "MqttProcessHeartbeatTopic": "charts/process/heartbeat",
+    "MqttProcessCompletedTopic": "charts/process/completed",
+    "MqttProcessFailedTopic": "charts/process/failed"
+  }
+}
 ```
 
-### ML worker
+Backend публикует исходящие сообщения из таблицы `mqtt_messages`, где:
 
-В `ml-worker/.env`:
+```text
+direction = out
+status = pending | published | error
+```
+
+## Настройки ML-worker
+
+Пример находится в `ml-worker/.env.example`.
+
+Для локального запуска можно создать `ml-worker/.env`:
 
 ```env
 MQTT_ENABLED=1
@@ -81,37 +104,55 @@ MQTT_PROCESS_FAILED_TOPIC=charts/process/failed
 PROCESSING_HEARTBEAT_INTERVAL_SECONDS=10
 ```
 
-Опционально для нескольких worker:
+Для нескольких worker можно включить shared subscription:
 
 ```env
 MQTT_SHARED_GROUP=diplom-workers
 ```
 
-Тогда worker подпишется на `$share/diplom-workers/charts/process/request`.
+Тогда worker подпишется на:
 
-## Как запускать
-
-### Backend
-
-```powershell
-cd C:\Users\nikit\source\repos\diplomWork
-powershell -ExecutionPolicy Bypass -File .\run-backend.ps1
+```text
+$share/diplom-workers/charts/process/request
 ```
 
-### ML worker
+Mosquitto поддерживает такие shared subscriptions.
 
-```powershell
-cd C:\Users\nikit\source\repos\diplomWork\ml-worker
-.\.venv\Scripts\python.exe .\worker_modal.py
+## Topics
+
+| Topic | Направление | Назначение |
+|---|---|---|
+| `charts/process/request` | Backend -> ML-worker | Новая задача обработки. |
+| `charts/process/accepted` | ML-worker -> Backend | Worker принял задачу. |
+| `charts/process/heartbeat` | ML-worker -> Backend | Worker продолжает обработку. |
+| `charts/process/completed` | ML-worker -> Backend | Обработка завершена успешно. |
+| `charts/process/failed` | ML-worker -> Backend | Обработка завершена ошибкой. |
+
+## QoS
+
+Backend публикует сообщения с QoS 1. ML-worker подписывается на задачи с QoS 1.
+
+Повторная доставка MQTT-сообщения не должна ломать состояние системы, потому что backend использует `messageId` и таблицу `mqtt_messages`:
+
+```text
+direction = in
+message_id = уникальный id события
 ```
 
-## Поведение режимов
+Если входящее событие уже было обработано, backend игнорирует дубль.
 
-- При `MQTT_ENABLED=1` worker работает через MQTT-события.
-- При `MQTT_ENABLED=0` worker остается на старом polling по `charts.status='uploaded'`.
-- Источник истины:
-  - `PostgreSQL` для состояния;
-  - `storage` для файлов и артефактов.
-- Retry policy сейчас применяется для безопасного случая `lease expired`: backend выдает новую MQTT-команду с новым `messageId`, а запоздалые события старой попытки игнорируются.
-- Для `failed` от worker backend тоже умеет делать controlled retry, если событие помечено как `retryable=true` или попадает под fallback-классификацию временной ошибки.
-- Операционный snapshot метрик доступен на `GET /metrics/processing`.
+## Production-заметки
+
+Текущий `mosquitto.conf` предназначен для локальной разработки:
+
+```conf
+allow_anonymous true
+```
+
+Для production нужно:
+
+- отключить anonymous-доступ;
+- настроить `password_file`;
+- включить TLS;
+- вынести host, port, username и password в переменные окружения;
+- открыть порт `1883` только для backend и ML-worker, либо использовать защищенную сеть.
