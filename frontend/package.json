@@ -12,12 +12,17 @@
   },
   "dependencies": {
     "@aurelia/router-direct": "^2.0.0-rc.1",
-    "aurelia": "^2.0.0-rc.1"
+    "aurelia": "^2.0.0-rc.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@tailwindcss/vite": "^4.1.18",
     "@types/node": "^24.10.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.23",
     "eslint": "^9.39.1",
     "globals": "^16.5.0",

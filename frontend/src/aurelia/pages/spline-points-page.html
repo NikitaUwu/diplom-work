@@ -70,14 +70,14 @@
       </div>
 
       <div class="mt-6">
-        <compact-graph-editor
+        <react-graph-editor
           chart-id.bind="chartId"
           backdrop-image-url.bind="chart ? chartFileUrl(chart.id, 'original') : undefined"
           show-backdrop.bind="true"
           result-json.bind="editorResultJson"
           mode="compact"
           on-result-json-change.bind="onEditorResultJsonChange">
-        </compact-graph-editor>
+        </react-graph-editor>
       </div>
     </section>
   </div>
