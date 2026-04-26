@@ -699,7 +699,8 @@ export default function GraphEditor({
   const [editorWidthScale, setEditorWidthScale] = useState(1);
   const [editorHeightScale, setEditorHeightScale] = useState(1);
   const [backdropMoveMode, setBackdropMoveMode] = useState(false);
-  const [backdropScale, setBackdropScale] = useState(1);
+  const [backdropScaleX, setBackdropScaleX] = useState(1);
+  const [backdropScaleY, setBackdropScaleY] = useState(1);
   const [backdropOffset, setBackdropOffset] = useState<BackdropOffset>({ x: 0, y: 0 });
   const prevDomainXRef = useRef<[number, number]>(view.domainX);
   const prevDomainYRef = useRef<[number, number]>(view.domainY);
@@ -778,7 +779,8 @@ export default function GraphEditor({
 
   useEffect(() => {
     setBackdropMoveMode(false);
-    setBackdropScale(1);
+    setBackdropScaleX(1);
+    setBackdropScaleY(1);
     setBackdropOffset({ x: 0, y: 0 });
   }, [chartId, backdropImageUrl]);
 
@@ -841,7 +843,7 @@ export default function GraphEditor({
     () => seriesList.find((s) => s.id === activeSeriesId) ?? null,
     [seriesList, activeSeriesId]
   );
-  const canMoveBackdrop = showBackdrop && Boolean(backdropImageUrl) && !overlayLocked;
+  const canMoveBackdrop = showBackdrop && Boolean(backdropImageUrl) && Boolean(imageSize);
   const detectedNames = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -883,7 +885,8 @@ export default function GraphEditor({
     setPanMode(false);
     setBackdropMoveMode(false);
     setBackdropOffset({ x: 0, y: 0 });
-    setBackdropScale(1);
+    setBackdropScaleX(1);
+    setBackdropScaleY(1);
   }, [
     calibration,
     overlayLocked,
@@ -1035,14 +1038,6 @@ export default function GraphEditor({
     return DEFAULT_EDITOR_PLOT_HEIGHT / Math.max(calibrationPlotSize.h, 1);
   }, [calibrationPlotSize]);
 
-  const baseOverlayContentBox = useMemo(() => {
-    if (!overlayLocked || !imageSize || !calibrationImageScale) return null;
-    return {
-      w: Math.max(120, Math.round(imageSize.w * calibrationImageScale)),
-      h: Math.max(120, Math.round(imageSize.h * calibrationImageScale)),
-    };
-  }, [calibrationImageScale, imageSize, overlayLocked]);
-
   const basePlotSize = useMemo(() => {
     if (calibrationPlotSize) {
       return {
@@ -1060,19 +1055,6 @@ export default function GraphEditor({
   }, [calibrationImageScale, calibrationPlotSize, imageSize]);
 
   const contentBox = useMemo(() => {
-    if (baseOverlayContentBox) {
-      return {
-        w: Math.max(
-          MIN_EDITOR_WINDOW_WIDTH,
-          Math.round(baseOverlayContentBox.w * Math.max(MIN_EDITOR_WINDOW_SCALE, editorWidthScale))
-        ),
-        h: Math.max(
-          MIN_EDITOR_WINDOW_HEIGHT,
-          Math.round(baseOverlayContentBox.h * Math.max(MIN_EDITOR_WINDOW_SCALE, editorHeightScale))
-        ),
-      };
-    }
-
     const plotWidthScale = Math.max(MIN_EDITOR_WINDOW_SCALE, editorWidthScale);
     const plotHeightScale = Math.max(MIN_EDITOR_WINDOW_SCALE, editorHeightScale);
 
@@ -1083,7 +1065,7 @@ export default function GraphEditor({
       w: plotWidth + EDITOR_MARGIN.l + EDITOR_MARGIN.r,
       h: plotHeight + EDITOR_MARGIN.t + EDITOR_MARGIN.b,
     };
-  }, [baseOverlayContentBox, basePlotSize.h, basePlotSize.w, editorHeightScale, editorWidthScale]);
+  }, [basePlotSize.h, basePlotSize.w, editorHeightScale, editorWidthScale]);
 
   const windowBox = contentBox;
   const visibleWindowWidth = Math.max(
@@ -1091,25 +1073,11 @@ export default function GraphEditor({
     Math.min(windowBox.w, maxEditorWidth ?? windowBox.w)
   );
 
-  const overlayCanvasScale = useMemo(() => {
-    if (!overlayLocked || !imageSize) return null;
-    return {
-      x: contentBox.w / Math.max(imageSize.w, 1),
-      y: contentBox.h / Math.max(imageSize.h, 1),
-    };
-  }, [contentBox.h, contentBox.w, imageSize, overlayLocked]);
-
   const applyEditorWindowSize = (nextWidth: number, nextHeight: number) => {
     const boundedWidth = Math.max(
       MIN_EDITOR_WINDOW_WIDTH,
       Math.min(nextWidth, maxEditorWidth ?? nextWidth)
     );
-
-    if (baseOverlayContentBox) {
-      setEditorWidthScale(Math.max(MIN_EDITOR_WINDOW_SCALE, boundedWidth / Math.max(baseOverlayContentBox.w, 1)));
-      setEditorHeightScale(Math.max(MIN_EDITOR_WINDOW_SCALE, nextHeight / Math.max(baseOverlayContentBox.h, 1)));
-      return;
-    }
 
     const plotWidth = Math.max(50, boundedWidth - EDITOR_MARGIN.l - EDITOR_MARGIN.r);
     const plotHeight = Math.max(50, nextHeight - EDITOR_MARGIN.t - EDITOR_MARGIN.b);
@@ -1163,41 +1131,29 @@ export default function GraphEditor({
   };
 
   const layout = useMemo(() => {
-    if (overlayLocked && calibration && calibrationPlotSize && overlayCanvasScale) {
-      const left = calibration.plotArea.left * overlayCanvasScale.x;
-      const top = calibration.plotArea.top * overlayCanvasScale.y;
-      const pw = calibrationPlotSize.w * overlayCanvasScale.x;
-      const ph = calibrationPlotSize.h * overlayCanvasScale.y;
-
-      return {
-        l: left,
-        r: Math.max(0, contentBox.w - left - pw),
-        t: top,
-        b: Math.max(0, contentBox.h - top - ph),
-        pw,
-        ph,
-      };
-    }
-
     const pw = Math.max(50, contentBox.w - EDITOR_MARGIN.l - EDITOR_MARGIN.r);
     const ph = Math.max(50, contentBox.h - EDITOR_MARGIN.t - EDITOR_MARGIN.b);
     return { ...EDITOR_MARGIN, pw, ph };
-  }, [calibration, calibrationPlotSize, contentBox, overlayCanvasScale, overlayLocked]);
+  }, [contentBox]);
 
   const backdropFrame = useMemo(() => {
     if (!imageSize) return null;
 
-    if (overlayLocked) {
+    if (overlayLocked && calibration && calibrationPlotSize) {
+      const autoScaleX = layout.pw / Math.max(calibrationPlotSize.w, 1);
+      const autoScaleY = layout.ph / Math.max(calibrationPlotSize.h, 1);
+      const imagePlotCenterX = calibration.plotArea.left + calibrationPlotSize.w / 2;
+      const imagePlotCenterY = calibration.plotArea.top + calibrationPlotSize.h / 2;
       return {
-        width: Math.max(1, contentBox.w),
-        height: Math.max(1, contentBox.h),
-        x: 0,
-        y: 0,
+        width: Math.max(1, imageSize.w * autoScaleX * backdropScaleX),
+        height: Math.max(1, imageSize.h * autoScaleY * backdropScaleY),
+        x: layout.l + layout.pw / 2 - imagePlotCenterX * autoScaleX * backdropScaleX + backdropOffset.x,
+        y: layout.t + layout.ph / 2 - imagePlotCenterY * autoScaleY * backdropScaleY + backdropOffset.y,
       };
     }
 
-    const width = Math.max(1, basePlotSize.w * backdropScale);
-    const height = Math.max(1, basePlotSize.h * backdropScale);
+    const width = Math.max(1, basePlotSize.w * backdropScaleX);
+    const height = Math.max(1, basePlotSize.h * backdropScaleY);
     return {
       width,
       height,
@@ -1207,28 +1163,26 @@ export default function GraphEditor({
   }, [
     backdropOffset.x,
     backdropOffset.y,
-    backdropScale,
+    backdropScaleX,
+    backdropScaleY,
     basePlotSize.h,
     basePlotSize.w,
+    calibration,
+    calibrationPlotSize,
     imageSize,
     layout.l,
     layout.ph,
     layout.pw,
     layout.t,
     overlayLocked,
-    contentBox.h,
-    contentBox.w,
   ]);
 
   const backdropBounds = useMemo(
-    () =>
-      overlayLocked
-        ? { x: 0, y: 0 }
-        : {
-            x: Math.max(layout.pw, backdropFrame?.width ?? layout.pw),
-            y: Math.max(layout.ph, backdropFrame?.height ?? layout.ph),
-          },
-    [backdropFrame?.height, backdropFrame?.width, layout.ph, layout.pw, overlayLocked]
+    () => ({
+      x: Math.max(contentBox.w, backdropFrame?.width ?? contentBox.w),
+      y: Math.max(contentBox.h, backdropFrame?.height ?? contentBox.h),
+    }),
+    [backdropFrame?.height, backdropFrame?.width, contentBox.h, contentBox.w]
   );
 
   useEffect(() => {
@@ -1775,8 +1729,13 @@ export default function GraphEditor({
     return entries;
   };
 
+  const resetBackdropTransform = () => {
+    setBackdropOffset({ x: 0, y: 0 });
+    setBackdropScaleX(1);
+    setBackdropScaleY(1);
+  };
+
   const startBackdropDrag = (e: React.PointerEvent) => {
-    if (overlayLocked) return;
     if (!canMoveBackdrop) return;
 
     e.preventDefault();
@@ -2386,6 +2345,32 @@ export default function GraphEditor({
             Сбросить размер редактора
           </Button>
         )}
+
+        {!compactMode && canMoveBackdrop && (
+          <Button
+            variant="secondary"
+            type="button"
+            onClick={() => {
+              setErr(null);
+              setPanMode(false);
+              setGridDragAxis(null);
+              setHover(null);
+              setSelection(null);
+              setPendingAssignName(null);
+              setMode("select");
+              deleteSelectionDragRef.current = null;
+              setDeleteSelectionBox(null);
+              setBackdropMoveMode((value) => !value);
+            }}
+            className={
+              backdropMoveMode
+                ? "border-amber-400 bg-amber-100 text-amber-900 hover:bg-amber-200 dark:border-amber-500 dark:bg-amber-950/50 dark:text-amber-200 dark:hover:bg-amber-900/70"
+                : undefined
+            }
+          >
+            {backdropMoveMode ? "Закончить подложку" : "Настроить подложку"}
+          </Button>
+        )}
         <Button
           variant="secondary"
           type="button"
@@ -2619,6 +2604,54 @@ export default function GraphEditor({
         </div>
       </div>
 
+      {backdropMoveMode && canMoveBackdrop && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950 shadow-sm dark:border-amber-900/50 dark:bg-amber-950/25 dark:text-amber-100">
+          <div className="font-semibold">Подложка</div>
+          <div className="text-xs text-amber-800 dark:text-amber-200">
+            Тащи изображение мышью, ширину и высоту меняй ползунками.
+          </div>
+          <label className="flex items-center gap-2">
+            <span className="text-xs font-medium">Ширина</span>
+            <input
+              type="range"
+              min={0.2}
+              max={3}
+              step={0.01}
+              value={backdropScaleX}
+              onChange={(e) => setBackdropScaleX(Number(e.target.value))}
+              className="w-36"
+            />
+            <span className="w-12 text-xs text-amber-700 dark:text-amber-200">{Math.round(backdropScaleX * 100)}%</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="text-xs font-medium">Высота</span>
+            <input
+              type="range"
+              min={0.2}
+              max={3}
+              step={0.01}
+              value={backdropScaleY}
+              onChange={(e) => setBackdropScaleY(Number(e.target.value))}
+              className="w-36"
+            />
+            <span className="w-12 text-xs text-amber-700 dark:text-amber-200">{Math.round(backdropScaleY * 100)}%</span>
+          </label>
+          <Button
+            variant="secondary"
+            type="button"
+            onClick={resetBackdropTransform}
+            disabled={
+              Math.abs(backdropScaleX - 1) < 1e-6 &&
+              Math.abs(backdropScaleY - 1) < 1e-6 &&
+              Math.abs(backdropOffset.x) < 1e-6 &&
+              Math.abs(backdropOffset.y) < 1e-6
+            }
+          >
+            Сбросить подложку
+          </Button>
+        </div>
+      )}
+
       <div className={compactMode ? "w-full overflow-auto" : "flex flex-col gap-4 md:flex-row md:items-start"}>
         {!compactMode && showSidebar && (
           <aside className="w-full shrink-0 rounded-2xl bg-white p-4 ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800 md:w-72">
@@ -2746,10 +2779,10 @@ export default function GraphEditor({
                   style={
                     overlayLocked
                       ? {
-                          left: 0,
-                          top: 0,
-                          width: contentBox.w,
-                          height: contentBox.h,
+                          left: backdropFrame.x,
+                          top: backdropFrame.y,
+                          width: backdropFrame.width,
+                          height: backdropFrame.height,
                         }
                       : {
                           left: backdropFrame.x - layout.l,

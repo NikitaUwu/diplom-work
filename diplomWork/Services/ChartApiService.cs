@@ -102,7 +102,7 @@ public sealed class ChartApiService
             await File.WriteAllBytesAsync(originalPath, fileBytes, cancellationToken);
             wroteFile = true;
 
-            chart.OriginalPath = originalPath;
+            chart.OriginalPath = ToStorageRelativePath(originalPath);
             chart.Status = ChartStatus.uploaded.ToString();
             var processingJob = await CreateProcessingJobAsync(chart, cancellationToken);
             await EnqueueProcessRequestAsync(processingJob, cancellationToken);
@@ -188,7 +188,7 @@ public sealed class ChartApiService
     {
         if (string.Equals(fileKey, "original", StringComparison.Ordinal))
         {
-            var filePath = _storageService.ResolveInStorage(chart.OriginalPath, allowAbsolute: true);
+            var filePath = ResolveOriginalFilePath(chart);
             EnsureFileExists(filePath);
             return (filePath, string.IsNullOrWhiteSpace(chart.MimeType) ? null : chart.MimeType);
         }
@@ -408,6 +408,38 @@ public sealed class ChartApiService
         {
             throw new ApiProblemException(StatusCodes.Status404NotFound, "File is missing on disk");
         }
+    }
+
+    private string ResolveOriginalFilePath(Chart chart)
+    {
+        if (!string.IsNullOrWhiteSpace(chart.OriginalPath))
+        {
+            try
+            {
+                var filePath = _storageService.ResolveInStorage(chart.OriginalPath, allowAbsolute: true);
+                if (File.Exists(filePath))
+                {
+                    return filePath;
+                }
+            }
+            catch (ApiProblemException) when (Path.IsPathRooted(chart.OriginalPath))
+            {
+            }
+        }
+
+        var fallbackPath = Path.Combine(_storageService.GetChartDirectory(chart.UserId, chart.Id), SafeFilename(chart.OriginalFilename));
+        if (File.Exists(fallbackPath))
+        {
+            return fallbackPath;
+        }
+
+        return _storageService.ResolveInStorage(chart.OriginalPath, allowAbsolute: true);
+    }
+
+    private string ToStorageRelativePath(string filePath)
+    {
+        return Path.GetRelativePath(_storageService.EnsureStorageRoot(), filePath)
+            .Replace('\\', '/');
     }
 
     private static string SafeFilename(string? fileName)

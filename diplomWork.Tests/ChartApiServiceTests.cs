@@ -33,7 +33,10 @@ public sealed class ChartApiServiceTests
         Assert.Equal("pending", outboxMessage.Status);
         Assert.Equal(processingJob.Id, outboxMessage.ProcessingJobId);
         Assert.Equal(harness.Options.MqttProcessRequestTopic, outboxMessage.Topic);
-        Assert.True(File.Exists(chart.OriginalPath));
+        Assert.False(Path.IsPathRooted(chart.OriginalPath));
+        var (originalFilePath, originalMediaType) = harness.Service.ResolveChartFile(chart, "original");
+        Assert.True(File.Exists(originalFilePath));
+        Assert.Equal("image/png", originalMediaType);
 
         var requestPayload = ParseJson(processingJob.RequestPayload);
         Assert.Equal(chart.Id, requestPayload["chartId"]!.GetValue<int>());
@@ -61,7 +64,10 @@ public sealed class ChartApiServiceTests
         Assert.Equal("uploaded", chart.Status);
         Assert.Equal("queued", processingJob.Status);
         Assert.Empty(await harness.Db.MqttMessages.Where(item => item.Direction == "out").ToListAsync());
-        Assert.True(File.Exists(chart.OriginalPath));
+        Assert.False(Path.IsPathRooted(chart.OriginalPath));
+        var (originalFilePath, originalMediaType) = harness.Service.ResolveChartFile(chart, "original");
+        Assert.True(File.Exists(originalFilePath));
+        Assert.Equal("image/png", originalMediaType);
     }
 
     private static MemoryStream CreateUploadStream(string content) =>

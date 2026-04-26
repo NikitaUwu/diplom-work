@@ -22,10 +22,6 @@ class LineFormer:
         logger.info(f"LineFormer preprocessing enabled: {self.use_preprocessing}")
 
     def _preprocess_image(self, img: np.ndarray, results_path: Path):
-        """
-        Ультра-селективная очистка для Заказчика:
-        Фокус только на жирных черных графиках.
-        """
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
         gray = cv2.addWeighted(gray, 1.5, gray, 0, -50) 

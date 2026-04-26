@@ -16,7 +16,6 @@ from ..utils import logger
 
 class ChartDete:
     def __init__(self, device: str = "cuda:0"):
-        """Initialize ChartDete model."""
         from mmdet.apis import init_detector
 
         logger.info("Loading ChartDete model...")
@@ -40,13 +39,6 @@ class ChartDete:
         logger.info("Successfully loaded ChartDete!")
 
     def inference(self, input_dir: str, output_dir: str) -> None:
-        """
-        Detect chart elements in all images in input_dir.
-
-        Args:
-            input_dir: Directory containing input images
-            output_dir: Directory to save results
-        """
         from mmdet.apis import inference_detector
 
         logger.info("Running ChartDete...")
@@ -167,10 +159,6 @@ class ChartDete:
                     return cropped_paths
 
                 def _split_by_whitespace_gaps(gray_crop, min_gap=8):
-                    """
-                    Split a grayscale image into columns by finding vertical whitespace gaps.
-                    Returns list of (col_name, x1, x2) tuples.
-                    """
                     binary = cv2.threshold(
                         gray_crop, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
                     )[1]
@@ -268,10 +256,6 @@ class ChartDete:
                     return footer_paths
 
                 def save_legend_area_crops(h_img, w_img):
-                    """
-                    Crop legend_area regions in the footer (below plot area) and split by whitespace gaps.
-                    Only processes legend_area boxes that are below the plot area to avoid noise.
-                    """
                     legend_paths = []
                     plot_areas_local = sorted(
                         bounding_boxes.get("plot_area", []), key=lambda el: el[4], reverse=True
@@ -294,7 +278,6 @@ class ChartDete:
                         x1, y1 = int(x1), int(y1)
                         x2, y2 = int(x2), int(y2)
 
-                        # Only process legend_area boxes below the plot area (footer region)
                         if y1 < plot_y_max:
                             continue
 
@@ -397,7 +380,6 @@ class ChartDete:
                 footer_paths = save_footer_crops(h_img, w_img)
                 legend_area_paths = save_legend_area_crops(h_img, w_img)
 
-                # Save chart and series text crops for OCR.
                 for label_name, threshold, pad_w_ratio, pad_h_ratio in [
                     ("legend_label", 0.5, 0.12, 0.28),
                     ("mark_label", 0.35, 0.16, 0.30),
