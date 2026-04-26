@@ -25,7 +25,6 @@ function withQuery(path: string, params: Record<string, string | number | boolea
 }
 
 export type ChartStatus = 'uploaded' | 'processing' | 'done' | 'error';
-export type ChartExportFormat = 'csv' | 'txt' | 'json' | 'table_csv';
 
 export interface ChartCreateResponse {
   id: number;
@@ -191,25 +190,6 @@ export function chartFileUrl(chartId: number, fileKey: string): string {
   return apiUrl(`/charts/${chartId}/files/${encodeURIComponent(fileKey)}`);
 }
 
-export function chartExportUrl(
-  chartId: number,
-  format: ChartExportFormat,
-  options: {
-    panelId?: string;
-    seriesId?: string;
-    pretty?: boolean;
-  } = {},
-): string {
-  return apiUrl(
-    withQuery(`/charts/${chartId}/export`, {
-      format,
-      panelId: options.panelId,
-      seriesId: options.seriesId,
-      pretty: options.pretty,
-    }),
-  );
-}
-
 async function patchChartResult(
   chartId: number,
   resultJson: unknown,
@@ -239,22 +219,6 @@ export async function saveChartResult(
   resultJson: unknown,
 ): Promise<ChartCreateResponse> {
   return patchChartResult(chartId, resultJson, true);
-}
-
-export async function previewChartSplinePoints(
-  chartId: number,
-  totalPoints: number,
-  resultJson?: unknown,
-): Promise<ChartCreateResponse> {
-  return apiFetchJson<ChartCreateResponse>(
-    `/charts/${chartId}/cubic-preview`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ totalPoints, resultJson }),
-    },
-    'Предпросмотр кубического сплайна по точкам',
-  );
 }
 
 export async function previewChartRandomSplinePoints(

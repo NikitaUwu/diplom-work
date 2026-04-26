@@ -1,12 +1,12 @@
 # Запуск проекта
 
-Этот документ описывает текущий способ локального запуска всего проекта без S3/MinIO. Сейчас используются:
+Документ описывает актуальный локальный запуск проекта без S3/MinIO. Сейчас используются:
 
 - backend на `.NET 8`
 - frontend на `Aurelia 2 + Vite`
 - `PostgreSQL`
-- `Mosquitto` через Docker
 - `Python ml-worker`
+- `Mosquitto` только если включен MQTT-режим
 
 ## Что должно быть установлено
 
@@ -14,57 +14,55 @@
 - `Node.js` и `npm`
 - `Python 3.10`
 - `PostgreSQL`
-- `Docker Desktop`
+- `Docker Desktop` только для запуска Mosquitto
 
-## Что должно быть настроено
+## Конфигурация
 
-### 1. Backend
+### Backend
 
-Файл локальной конфигурации:
+Основной локальный файл:
 
 - `diplomWork/appsettings.Development.json`
 
-Проверь, что в нем корректны:
+Проверь:
 
-- строка подключения к PostgreSQL
-- `App.MqttEnabled = true`
-- `App.MqttHost = "localhost"`
-- `App.MqttPort = 1883`
-- `App.CorsOrigins` содержит `http://localhost:5173`
+- строку подключения к PostgreSQL
+- `App.CorsOrigins` с `http://localhost:5173`
+- `App.MqttEnabled`
 
-Локальный backend по умолчанию запускается на:
+Режимы backend:
+
+- `App.MqttEnabled = true` — backend публикует задачи в MQTT и принимает события от worker
+- `App.MqttEnabled = false` — backend не использует MQTT и ждет, что worker сам будет опрашивать `processing_jobs`
+
+По умолчанию backend доступен на:
 
 - `http://localhost:5092`
+- Swagger: `http://localhost:5092/swagger`
 
-Swagger:
+### Frontend
 
-- `http://localhost:5092/swagger`
-
-### 2. Frontend
-
-Во фронтенде уже используется:
+Файл:
 
 - `frontend/.env`
 
-Текущее значение:
+Типовое значение:
 
 ```env
 VITE_API_BASE_URL=http://localhost:5092/api/v1
 ```
 
-Если backend запускается на другом адресе или порту, обнови это значение.
+### ML-worker
 
-### 3. ML-worker
-
-Файл окружения:
+Файл:
 
 - `ml-worker/.env`
 
-Можно взять за основу:
+Шаблон:
 
 - `ml-worker/.env.example`
 
-Минимально должны быть заданы:
+Минимальный пример:
 
 ```env
 DATABASE_URL=postgresql://...
@@ -78,9 +76,21 @@ MQTT_PROCESS_HEARTBEAT_TOPIC=charts/process/heartbeat
 MQTT_PROCESS_COMPLETED_TOPIC=charts/process/completed
 MQTT_PROCESS_FAILED_TOPIC=charts/process/failed
 PROCESSING_HEARTBEAT_INTERVAL_SECONDS=10
+STORAGE_DIR=...
+WORK_DIR=...
+POLL_INTERVAL=2
 ```
 
-Если `.venv` отсутствует, создай его и установи зависимости:
+Режимы worker:
+
+- `MQTT_ENABLED=1` — задачи приходят через MQTT, worker не работает с БД напрямую
+- `MQTT_ENABLED=0` — worker берет задачи из `processing_jobs` напрямую через polling БД
+
+Важно: если MQTT выключен, у backend и worker должен быть согласован один и тот же режим.
+
+## Подготовка Python-окружения
+
+Если `ml-worker/.venv` отсутствует:
 
 ```powershell
 cd .\ml-worker
@@ -89,43 +99,23 @@ py -3.10 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r ..\requirements.txt
 ```
 
-## Порядок запуска
+## Запуск
 
-### Вариант 1. Через Visual Studio + терминалы
+### Вариант 1. Visual Studio + терминалы
 
-#### Шаг 1. Запусти Mosquitto
+#### 1. Запусти Mosquitto при `MQTT_ENABLED=1`
 
-Из корня проекта:
+Если MQTT выключен, этот шаг не нужен.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-mosquitto.ps1 -Detached
 ```
 
-Порт брокера:
+#### 2. Запусти backend
 
-- `localhost:1883`
+Открой `diplomWork.sln`, выбери проект `diplomWork` стартовым, профиль `http` и запусти его.
 
-Mosquitto можно потом запускать и останавливать через Docker Desktop.
-
-#### Шаг 2. Запусти backend
-
-Открой:
-
-- `diplomWork.sln`
-
-В Visual Studio:
-
-1. Выбери проект `diplomWork` стартовым.
-2. Выбери профиль `http`.
-3. Запусти проект.
-
-Backend будет доступен по адресу:
-
-- `http://localhost:5092`
-
-#### Шаг 3. Запусти frontend
-
-В отдельном терминале:
+#### 3. Запусти frontend
 
 ```powershell
 cd .\frontend
@@ -133,38 +123,30 @@ npm install
 npm run dev
 ```
 
-Фронтенд по умолчанию будет доступен по адресу:
-
-- `http://localhost:5173`
-
-#### Шаг 4. Запусти ML-worker
-
-В отдельном терминале:
+#### 4. Запусти worker
 
 ```powershell
 cd .\ml-worker
-.\.venv\Scripts\python.exe -u .\worker_modal.py
+.\.venv\Scripts\python.exe -u .\worker_local.py
 ```
 
-Worker читает настройки из:
+### Вариант 2. Полностью из консоли
 
-- `ml-worker/.env`
+#### 1. Mosquitto
 
-## Вариант 2. Полностью из консоли
-
-### 1. Mosquitto
+Только для MQTT-режима:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-mosquitto.ps1 -Detached
 ```
 
-### 2. Backend
+#### 2. Backend
 
 ```powershell
 .\run-backend.ps1
 ```
 
-### 3. Frontend
+#### 3. Frontend
 
 ```powershell
 cd .\frontend
@@ -172,71 +154,50 @@ npm install
 npm run dev
 ```
 
-### 4. ML-worker
+#### 4. Worker
 
 ```powershell
 cd .\ml-worker
-.\.venv\Scripts\python.exe -u .\worker_modal.py
+.\.venv\Scripts\python.exe -u .\worker_local.py
 ```
 
 ## Быстрая проверка
 
-После запуска всех частей проверь:
+После запуска проверь:
 
-1. Swagger backend открывается на `http://localhost:5092/swagger`
-2. frontend открывается на `http://localhost:5173`
-3. в Docker Desktop контейнер `diplom-mosquitto` находится в состоянии `Running`
-4. `ml-worker` не падает при старте
+1. `http://localhost:5092/swagger` открывается
+2. `http://localhost:5173` открывается
+3. `ml-worker` стартует без падения
+4. при MQTT-режиме контейнер `diplom-mosquitto` находится в состоянии `Running`
 
-Дальше сценарий проверки такой:
+Дальше можно:
 
 1. открыть frontend
-2. зарегистрироваться или войти
+2. войти или зарегистрироваться
 3. загрузить изображение графика
-4. дождаться завершения обработки
-5. открыть страницу результата и редактор
+4. дождаться статуса `done` или `error`
+5. открыть страницу результата
 
 ## Автоматический smoke-check
 
-Если backend уже запущен из Visual Studio, можно использовать встроенный скрипт проверки MQTT-контура:
+Скрипт проверки нужен только для MQTT-режима:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\visual-studio-mqtt-smoke-check.ps1
 ```
 
-Он:
-
-- проверяет `/health`
-- поднимает Mosquitto при необходимости
-- запускает `ml-worker`, если он еще не запущен
-- загружает тестовый график
-- ждет terminal status у chart
+Он проверяет `/health`, поднимает Mosquitto при необходимости, запускает `ml-worker`, загружает тестовый график и ждет terminal status.
 
 ## Остановка
 
-### Frontend
+- frontend: остановить терминал с `npm run dev`
+- worker: остановить терминал с `worker_local.py`
+- backend: остановить запуск в Visual Studio или завершить процесс `dotnet`
+- Mosquitto: `docker compose -f .\docker-compose.mqtt.yml down`
 
-Остановить терминал с `npm run dev`.
+## Типовые проблемы
 
-### ML-worker
-
-Остановить терминал с `worker_modal.py`.
-
-### Backend
-
-Остановить запуск в Visual Studio или завершить процесс `dotnet`.
-
-### Mosquitto
-
-Из корня проекта:
-
-```powershell
-docker compose -f .\docker-compose.mqtt.yml down
-```
-
-## Если что-то не работает
-
-### Frontend пустой или не может достучаться до API
+### Frontend не достучался до API
 
 Проверь:
 
@@ -244,28 +205,26 @@ docker compose -f .\docker-compose.mqtt.yml down
 - совпадает ли `frontend/.env` с адресом backend
 - разрешен ли `http://localhost:5173` в `CorsOrigins`
 
-### Worker не подключается к backend/MQTT
+### Worker не стартует
 
 Проверь:
 
 - существует ли `ml-worker/.env`
-- корректен ли `DATABASE_URL`
-- включен ли `MQTT_ENABLED=1`
-- поднят ли Mosquitto на `localhost:1883`
+- корректны ли `DATABASE_URL`, `STORAGE_DIR`, `WORK_DIR`
+- установлены ли зависимости в `ml-worker/.venv`
 
-### Backend не стартует
+### MQTT-режим не работает
 
 Проверь:
 
-- доступность PostgreSQL
-- корректность строки подключения
-- занятость порта `5092`
+- `App.MqttEnabled = true` у backend
+- `MQTT_ENABLED=1` у worker
+- доступен ли Mosquitto на `localhost:1883`
 
-### Python-модули не найдены
+### Режим без MQTT не работает
 
-Переустанови зависимости в `ml-worker/.venv`:
+Проверь:
 
-```powershell
-cd .\ml-worker
-.\.venv\Scripts\python.exe -m pip install -r ..\requirements.txt
-```
+- `App.MqttEnabled = false` у backend
+- `MQTT_ENABLED=0` у worker
+- worker видит ту же БД, что и backend

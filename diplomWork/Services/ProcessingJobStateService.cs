@@ -115,8 +115,7 @@ public sealed class ProcessingJobStateService
         JsonNode? payloadNode,
         CancellationToken cancellationToken)
     {
-        Chart? chartForDataJson = null;
-        JsonObject? resultJsonForDataJson = null;
+        bool loadedResultJsonFromStorage = false;
 
         var applied = await ExecuteWithInboxAsync(topic, payload, payloadNode, cancellationToken, async () =>
         {
@@ -143,12 +142,14 @@ public sealed class ProcessingJobStateService
                 return;
             }
 
-            var resultJson = payload.ResultJson as JsonObject;
+            var (resultJson, resultLoadedFromStorage) = await ResolveResultJsonAsync(chart, payload, cancellationToken);
             if (resultJson is null)
             {
                 _logger.LogWarning("Ignoring completed event for job {JobId} without resultJson.", job.Id);
                 return;
             }
+
+            loadedResultJsonFromStorage = resultLoadedFromStorage;
 
             var now = DateTimeOffset.UtcNow;
             var resultDocument = JsonHelpers.ToDocument(resultJson);
@@ -172,10 +173,10 @@ public sealed class ProcessingJobStateService
             chart.NSeries = payload.NSeries ?? nSeries;
         });
 
-        if (applied)
+        if (applied && !loadedResultJsonFromStorage)
         {
-            chartForDataJson = await _db.Charts.FirstOrDefaultAsync(item => item.Id == payload.ChartId, cancellationToken);
-            resultJsonForDataJson = payload.ResultJson as JsonObject;
+            var chartForDataJson = await _db.Charts.FirstOrDefaultAsync(item => item.Id == payload.ChartId, cancellationToken);
+            var resultJsonForDataJson = payload.ResultJson as JsonObject;
             if (chartForDataJson is not null && resultJsonForDataJson is not null)
             {
                 await _chartStorageService.WriteDataJsonAsync(chartForDataJson, resultJsonForDataJson, cancellationToken);
@@ -191,8 +192,7 @@ public sealed class ProcessingJobStateService
         JsonNode? payloadNode,
         CancellationToken cancellationToken)
     {
-        Chart? chartForDataJson = null;
-        JsonObject? resultJsonForDataJson = null;
+        bool loadedResultJsonFromStorage = false;
 
         var applied = await ExecuteWithInboxAsync(topic, payload, payloadNode, cancellationToken, async () =>
         {
@@ -220,7 +220,8 @@ public sealed class ProcessingJobStateService
             }
 
             var now = DateTimeOffset.UtcNow;
-            var resultJson = payload.ResultJson as JsonObject;
+            var (resultJson, resultLoadedFromStorage) = await ResolveResultJsonAsync(chart, payload, cancellationToken);
+            loadedResultJsonFromStorage = resultLoadedFromStorage;
             var failurePolicy = GetWorkerFailurePolicy(payload);
             if (ShouldRetryFailedEvent(job, failurePolicy))
             {
@@ -248,10 +249,10 @@ public sealed class ProcessingJobStateService
             }
         });
 
-        if (applied)
+        if (applied && !loadedResultJsonFromStorage)
         {
-            chartForDataJson = await _db.Charts.FirstOrDefaultAsync(item => item.Id == payload.ChartId, cancellationToken);
-            resultJsonForDataJson = payload.ResultJson as JsonObject;
+            var chartForDataJson = await _db.Charts.FirstOrDefaultAsync(item => item.Id == payload.ChartId, cancellationToken);
+            var resultJsonForDataJson = payload.ResultJson as JsonObject;
             if (chartForDataJson is not null && resultJsonForDataJson is not null)
             {
                 await _chartStorageService.WriteDataJsonAsync(chartForDataJson, resultJsonForDataJson, cancellationToken);
@@ -539,6 +540,25 @@ public sealed class ProcessingJobStateService
             _options,
             NormalizeFailedErrorCode(payload),
             payload.Retryable);
+
+    private async Task<(JsonObject? ResultJson, bool LoadedFromStorage)> ResolveResultJsonAsync(
+        Chart chart,
+        ProcessingEventPayload payload,
+        CancellationToken cancellationToken)
+    {
+        if (payload.ResultJson is JsonObject inlineResultJson)
+        {
+            return (inlineResultJson, false);
+        }
+
+        if (!string.IsNullOrWhiteSpace(payload.ResultJsonPath))
+        {
+            var storedResultJson = await _chartStorageService.ReadJsonObjectAsync(chart, payload.ResultJsonPath, cancellationToken);
+            return (storedResultJson, true);
+        }
+
+        return (null, false);
+    }
 
     private static (int Panels, int Series) CountPanelsAndSeries(JsonObject resultJson)
     {

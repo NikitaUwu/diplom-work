@@ -79,17 +79,11 @@
             <button
               type="button"
               click.trigger="toggleBackdrop()"
-              class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+              class="inline-flex h-10 items-center rounded-xl border px-4 text-sm font-medium transition ${showOriginalBackdrop ? 'border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-500 dark:bg-amber-950/50 dark:text-amber-200' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'}">
               ${showOriginalBackdrop ? 'Скрыть подложку' : 'Показать подложку'}
             </button>
 
             <div class="flex flex-col gap-2">
-              <a
-                load.bind="`/charts/${chartId}/spline-points`"
-                class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
-                Сплайн по N
-              </a>
-
               <button
                 type="button"
                 click.trigger="buildAutoSpline()"
@@ -99,19 +93,19 @@
               </button>
 
               <button
+                if.bind="hasAutoSplineResult"
                 type="button"
                 click.trigger="toggleOnlyAutoSplinePoints()"
-                disabled.bind="!hasAutoSplineResult"
                 class="inline-flex h-10 items-center rounded-xl border px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${showOnlyAutoSplinePoints ? 'border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-500 dark:bg-amber-950/50 dark:text-amber-200' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'}">
-                ${showOnlyAutoSplinePoints ? 'Показать все точки' : 'Только точки сплайна'}
+                ${showOnlyAutoSplinePoints ? 'Показать все точки' : 'Показать только опорные точки'}
               </button>
 
               <button
+                if.bind="hasAutoSplineResult"
                 type="button"
                 click.trigger="toggleAutoSplineHighlight()"
-                disabled.bind="!hasAutoSplineResult"
-                class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
-                ${showAutoSplineHighlight ? 'Скрыть выделение' : 'Показать выделение'}
+                class="inline-flex h-10 items-center rounded-xl border px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${showAutoSplineHighlight ? 'border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-500 dark:bg-amber-950/50 dark:text-amber-200' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'}">
+                ${showAutoSplineHighlight ? 'Скрыть опорные точки' : 'Показать опорные точки'}
               </button>
             </div>
 
@@ -125,12 +119,24 @@
           </div>
         </div>
 
+        <div class="mt-3 text-xs text-slate-500 dark:text-slate-400">
+          Подложка работает в экспериментальном режиме и может отображаться неточно.
+        </div>
+
         <div if.bind="autoSplineError" class="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300">
           ${autoSplineError}
         </div>
 
-        <div if.bind="autoSplineResultJson" class="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700 dark:border-sky-900/40 dark:bg-sky-950/40 dark:text-sky-300">
-          Автосплайн подобрал ${autoSplineSelectedPointCount} опорные точки для наилучшего кубического сплайна, и они будут сохранены в JSON.
+        <div if.bind="autoSplineResultJson && showAutoSplineInfo" class="mt-4 flex items-start justify-between gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700 dark:border-sky-900/40 dark:bg-sky-950/40 dark:text-sky-300">
+          <div>
+            Автосплайн подобрал ${autoSplineSelectedPointCount} опорные точки для наилучшего кубического сплайна, и они будут сохранены в JSON.
+          </div>
+          <button
+            type="button"
+            click.trigger="dismissAutoSplineInfo()"
+            class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-base font-semibold text-sky-700 transition hover:bg-sky-100 dark:text-sky-300 dark:hover:bg-sky-900/40">
+            ×
+          </button>
         </div>
 
         <div class="mt-6">
@@ -149,33 +155,37 @@
 
       <section if.bind="hasExportableResult" class="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
         <div class="text-lg font-semibold text-slate-900 dark:text-slate-100">Экспорт</div>
-        <div class="mt-1 text-sm text-slate-600 dark:text-slate-400">Скачивание доступно после успешного извлечения точек.</div>
+        <div class="mt-1 text-sm text-slate-600 dark:text-slate-400">Экспорт сохраняет только названия кривых и координаты точек.</div>
 
-        <div if.bind="dirty" class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/40 dark:text-amber-200">
-          Есть несохранённые изменения. Сначала сохраните их, чтобы экспортировать актуальную версию результата.
-        </div>
-
-        <div class="mt-4 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-          <a
-            attr.href.bind="canExport ? exportUrl('csv') : null"
-            aria-disabled.bind="!canExport"
-            tabindex.bind="canExport ? null : '-1'"
-            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">CSV</a>
-          <a
-            attr.href.bind="canExport ? exportUrl('txt') : null"
-            aria-disabled.bind="!canExport"
-            tabindex.bind="canExport ? null : '-1'"
-            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">TXT</a>
-          <a
-            attr.href.bind="canExport ? exportUrl('json') : null"
-            aria-disabled.bind="!canExport"
-            tabindex.bind="canExport ? null : '-1'"
-            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">JSON</a>
-          <a
-            attr.href.bind="canExport ? exportUrl('table_csv') : null"
-            aria-disabled.bind="!canExport"
-            tabindex.bind="canExport ? null : '-1'"
-            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 aria-disabled:pointer-events-none aria-disabled:cursor-not-allowed aria-disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">TABLE</a>
+        <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            click.trigger="exportAllPointsCsv()"
+            disabled.bind="!canExportAllPoints"
+            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+            Все точки CSV
+          </button>
+          <button
+            type="button"
+            click.trigger="exportAllPointsJson()"
+            disabled.bind="!canExportAllPoints"
+            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+            Все точки JSON
+          </button>
+          <button
+            type="button"
+            click.trigger="exportAutoSplinePointsCsv()"
+            disabled.bind="!canExportAutoSplinePoints"
+            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+            Опорные точки CSV
+          </button>
+          <button
+            type="button"
+            click.trigger="exportAutoSplinePointsJson()"
+            disabled.bind="!canExportAutoSplinePoints"
+            class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+            Опорные точки JSON
+          </button>
         </div>
       </section>
     </div>

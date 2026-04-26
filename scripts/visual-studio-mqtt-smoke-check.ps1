@@ -121,7 +121,7 @@ function Ensure-WorkerRunning {
     $existing = Get-CimInstance Win32_Process |
         Where-Object {
             $_.Name -eq "python.exe" -and
-            $_.CommandLine -match [regex]::Escape("worker_modal.py")
+            $_.CommandLine -match [regex]::Escape("worker_local.py")
         }
 
     if ($existing) {
@@ -131,7 +131,7 @@ function Ensure-WorkerRunning {
     Remove-Item -LiteralPath $workerOut, $workerErr -Force -ErrorAction SilentlyContinue
     Start-Process `
         -FilePath $workerPython `
-        -ArgumentList @("-u", (Join-Path $workerDir "worker_modal.py")) `
+        -ArgumentList @("-u", (Join-Path $workerDir "worker_local.py")) `
         -WorkingDirectory $workerDir `
         -RedirectStandardOutput $workerOut `
         -RedirectStandardError $workerErr `

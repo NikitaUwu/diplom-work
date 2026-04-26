@@ -104,6 +104,20 @@ public sealed class ChartStorageService
         await File.WriteAllTextAsync(dataJsonPath, content, cancellationToken);
     }
 
+    public async Task<JsonObject> ReadJsonObjectAsync(Chart chart, string rawPath, CancellationToken cancellationToken = default)
+    {
+        var filePath = ResolveArtifactPath(chart, rawPath);
+        if (!File.Exists(filePath))
+        {
+            throw new ApiProblemException(StatusCodes.Status404NotFound, "File is missing on disk");
+        }
+
+        await using var stream = File.OpenRead(filePath);
+        var node = await JsonNode.ParseAsync(stream, cancellationToken: cancellationToken);
+        return node as JsonObject
+            ?? throw new ApiProblemException(StatusCodes.Status500InternalServerError, "Invalid JSON payload in storage");
+    }
+
     public string ResolveArtifactPath(Chart chart, string rawPath)
     {
         if (string.IsNullOrWhiteSpace(rawPath))

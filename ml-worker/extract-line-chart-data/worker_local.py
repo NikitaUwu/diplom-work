@@ -68,6 +68,13 @@ if ENV_PATH.exists():
     load_dotenv(ENV_PATH)
     print(f"[DEBUG] Loaded env file: {ENV_PATH}")
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw not in {"0", "false", "no", "off"}
+
+MQTT_ENABLED = _env_flag("MQTT_ENABLED", True)
 MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 MQTT_ACCEPTED_TOPIC = os.getenv("MQTT_PROCESS_ACCEPTED_TOPIC", "charts/process/accepted")
@@ -77,6 +84,9 @@ MQTT_FAILED_TOPIC = os.getenv("MQTT_PROCESS_FAILED_TOPIC", "charts/process/faile
 HEARTBEAT_INTERVAL_SECONDS = max(5, int(os.getenv("PROCESSING_HEARTBEAT_INTERVAL_SECONDS", "10")))
 WORK_DIR = Path(os.getenv("WORK_DIR", str(REPO_ROOT / "ml-worker" / "runs" / "worker"))).resolve()
 WORKER_ID = os.getenv("WORKER_ID", f"local-worker-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+POLL_INTERVAL_SECONDS = max(1.0, float(os.getenv("POLL_INTERVAL", "2")))
+PROCESSING_LEASE_SECONDS = max(5, int(os.getenv("PROCESSING_LEASE_SECONDS", "45")))
+DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -175,8 +185,177 @@ class Job:
 _job_queue: "queue.Queue[Job]" = queue.Queue()
 
 
+def _normalize_db_url(url: str) -> str:
+    return url.replace("postgresql+psycopg2://", "postgresql://", 1)
+
+
+def _connect_db():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is required when MQTT_ENABLED=0")
+
+    conn = psycopg2.connect(_normalize_db_url(DATABASE_URL))
+    conn.autocommit = False
+    return conn
+
+
+def _fetch_next_db_job(conn) -> Optional[Job]:
+    with conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    job.id AS job_id,
+                    job.message_id AS message_id,
+                    chart.id AS chart_id,
+                    chart.original_path AS original_path
+                FROM processing_jobs AS job
+                INNER JOIN charts AS chart ON chart.id = job.chart_id
+                WHERE job.status = %s
+                  AND (job.next_retry_at IS NULL OR job.next_retry_at <= NOW())
+                ORDER BY job.created_at ASC, job.id ASC
+                FOR UPDATE OF job SKIP LOCKED
+                LIMIT 1
+                """,
+                ("queued",),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+
+            now = datetime.utcnow()
+            cur.execute(
+                """
+                UPDATE processing_jobs
+                SET status = %s,
+                    error_message = NULL,
+                    error_code = NULL,
+                    worker_id = %s,
+                    attempt = attempt + 1,
+                    started_at = %s,
+                    last_heartbeat_at = %s,
+                    leased_until = NULL,
+                    next_retry_at = NULL,
+                    finished_at = NULL
+                WHERE id = %s
+                """,
+                ("processing", WORKER_ID, now, now, int(row["job_id"])),
+            )
+            cur.execute(
+                """
+                UPDATE charts
+                SET status = %s,
+                    error_message = NULL,
+                    processed_at = NULL
+                WHERE id = %s
+                """,
+                ("processing", int(row["chart_id"])),
+            )
+
+            return Job(
+                chart_id=int(row["chart_id"]),
+                original_path=str(row["original_path"]),
+                job_id=int(row["job_id"]),
+                message_id=str(row["message_id"]) if row["message_id"] is not None else None,
+            )
+
+
+def _mark_db_done(conn, job: Job, result_json: Dict[str, Any], n_panels: int, n_series: int) -> None:
+    with conn:
+        with conn.cursor() as cur:
+            now = datetime.utcnow()
+            cur.execute(
+                """
+                UPDATE processing_jobs
+                SET status = %s,
+                    error_message = NULL,
+                    error_code = NULL,
+                    worker_id = %s,
+                    last_heartbeat_at = %s,
+                    leased_until = NULL,
+                    next_retry_at = NULL,
+                    finished_at = %s,
+                    result_payload = %s
+                WHERE id = %s
+                """,
+                ("done", WORKER_ID, now, now, Json(result_json), job.job_id),
+            )
+            cur.execute(
+                """
+                UPDATE charts
+                SET status = %s,
+                    error_message = NULL,
+                    processed_at = %s,
+                    result_json = %s,
+                    n_panels = %s,
+                    n_series = %s
+                WHERE id = %s
+                """,
+                ("done", now, Json(result_json), n_panels, n_series, job.chart_id),
+            )
+
+
+def _mark_db_error(
+    conn,
+    job: Job,
+    message: str,
+    error_code: str,
+    result_json: Optional[Dict[str, Any]] = None,
+) -> None:
+    trimmed_message = message[:2000]
+    with conn:
+        with conn.cursor() as cur:
+            now = datetime.utcnow()
+            cur.execute(
+                """
+                UPDATE processing_jobs
+                SET status = %s,
+                    error_message = %s,
+                    error_code = %s,
+                    worker_id = %s,
+                    last_heartbeat_at = %s,
+                    leased_until = NULL,
+                    next_retry_at = NULL,
+                    finished_at = %s,
+                    result_payload = %s
+                WHERE id = %s
+                """,
+                ("error", trimmed_message, error_code, WORKER_ID, now, now, Json(result_json) if result_json is not None else None, job.job_id),
+            )
+            if result_json is None:
+                cur.execute(
+                    """
+                    UPDATE charts
+                    SET status = %s,
+                        error_message = %s,
+                        processed_at = %s
+                    WHERE id = %s
+                    """,
+                    ("error", trimmed_message, now, job.chart_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE charts
+                    SET status = %s,
+                        error_message = %s,
+                        processed_at = %s,
+                        result_json = %s
+                    WHERE id = %s
+                    """,
+                    ("error", trimmed_message, now, Json(result_json), job.chart_id),
+                )
+
+
 def _publish_processing_event(mqtt_client, topic: str, payload: Dict[str, Any]) -> None:
     mqtt_client.publish(topic, json.dumps(payload))
+
+
+def _write_result_json_to_storage(result_json: Dict[str, Any], src_file: Path, storage_dir: Path) -> str:
+    result_path = src_file.parent / "data.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    with result_path.open("w", encoding="utf-8") as f:
+        json.dump(result_json, f, ensure_ascii=False, indent=2)
+    return result_path.relative_to(storage_dir).as_posix()
 
 
 def _start_heartbeat_loop(mqtt_client, chart_id: int, job_id: Optional[int], message_id: Optional[str]) -> tuple[threading.Event, threading.Thread]:
@@ -199,9 +378,7 @@ def _start_heartbeat_loop(mqtt_client, chart_id: int, job_id: Optional[int], mes
     return stop_event, thread
 
 
-def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=None):
-    print(f"\n[WORKER] >>> Processing chart ID: {chart_id}")
-
+def _execute_pipeline(chart_id: int, original_path: str) -> tuple[Dict[str, Any], str, int, int]:
     src_file = Path(original_path)
     storage_dir = _storage_dir_from_original(src_file)
     if not src_file.is_absolute():
@@ -215,6 +392,65 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
     input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if not src_file.exists():
+        raise FileNotFoundError(f"File not found: {src_file}")
+
+    dst_path = input_dir / src_file.name
+    _run_extract_with_adaptive_downscale(src_file, dst_path, input_dir, output_dir)
+
+    data_files = list(output_dir.rglob("data.json"))
+    if not data_files:
+        raise Exception("Pipeline did not create data.json")
+
+    with open(data_files[0], "r", encoding="utf-8") as f:
+        points_data = json.load(f)
+
+    series_list = [
+        {"id": sid, "name": sid, "points": [[p["x"], p["y"]] for p in pts]}
+        for sid, pts in points_data.items()
+    ]
+
+    result_json = {
+        "panels": [{"id": "panel_0", "series": series_list, "x_unit": "X", "y_unit": "Y"}],
+        "artifacts": {},
+    }
+
+    artifact_specs = [
+        ("lineformer_prediction", "lineformer", "prediction.png"),
+        ("converted_plot", "converted_datapoints", "plot.png"),
+        ("chartdete_predictions", "chartdete", "predictions.*"),
+    ]
+    for art_name, artifact_dir, glob_pattern in artifact_specs:
+        files = list(output_dir.rglob(glob_pattern))
+        if files:
+            target_dir = src_file.parent / artifact_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+            art_path = target_dir / files[0].name
+            shutil.copy2(files[0], art_path)
+            result_json["artifacts"][art_name] = art_path.relative_to(storage_dir).as_posix()
+
+    if "converted_plot" in result_json["artifacts"]:
+        result_json["artifacts"]["restored_plot"] = result_json["artifacts"]["converted_plot"]
+
+    result_json_path = _write_result_json_to_storage(result_json, src_file, storage_dir)
+    return result_json, result_json_path, 1, len(series_list)
+
+
+def _build_failed_result_json(error_message: str, error_code: str) -> Dict[str, Any]:
+    return {
+        "artifacts": {},
+        "ml_meta": {
+            "worker_error": {
+                "message": error_message,
+                "code": error_code,
+            }
+        },
+    }
+
+
+def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=None):
+    print(f"\n[WORKER] >>> Processing chart ID: {chart_id}")
+
     accepted_payload = {
         "schemaVersion": 1,
         "jobId": job_id,
@@ -227,45 +463,7 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
     heartbeat_stop, heartbeat_thread = _start_heartbeat_loop(mqtt_client, chart_id, job_id, message_id)
 
     try:
-        if not src_file.exists():
-            raise FileNotFoundError(f"File not found: {src_file}")
-
-        dst_path = input_dir / src_file.name
-        _run_extract_with_adaptive_downscale(src_file, dst_path, input_dir, output_dir)
-
-        data_files = list(output_dir.rglob("data.json"))
-        if not data_files:
-            raise Exception("Pipeline did not create data.json")
-
-        with open(data_files[0], "r", encoding="utf-8") as f:
-            points_data = json.load(f)
-
-        series_list = [
-            {"id": sid, "name": sid, "points": [[p["x"], p["y"]] for p in pts]}
-            for sid, pts in points_data.items()
-        ]
-
-        result_json = {
-            "panels": [{"id": "panel_0", "series": series_list, "x_unit": "X", "y_unit": "Y"}],
-            "artifacts": {},
-        }
-
-        artifact_specs = [
-            ("lineformer_prediction", "lineformer", "prediction.png"),
-            ("converted_plot", "converted_datapoints", "plot.png"),
-            ("chartdete_predictions", "chartdete", "predictions.*"),
-        ]
-        for art_name, artifact_dir, glob_pattern in artifact_specs:
-            files = list(output_dir.rglob(glob_pattern))
-            if files:
-                target_dir = src_file.parent / artifact_dir
-                target_dir.mkdir(parents=True, exist_ok=True)
-                art_path = target_dir / files[0].name
-                shutil.copy2(files[0], art_path)
-                result_json["artifacts"][art_name] = art_path.relative_to(storage_dir).as_posix()
-
-        if "converted_plot" in result_json["artifacts"]:
-            result_json["artifacts"]["restored_plot"] = result_json["artifacts"]["converted_plot"]
+        _, result_json_path, n_panels, n_series = _execute_pipeline(chart_id, original_path)
 
         import torch
         if torch.cuda.is_available():
@@ -281,10 +479,9 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
             "messageId": f"completed-{message_id}-{uuid.uuid4().hex[:8]}",
             "requestMessageId": message_id,
             "workerId": WORKER_ID,
-            "status": "completed",
-            "resultJson": result_json,
-            "nPanels": 1,
-            "nSeries": len(series_list),
+            "resultJsonPath": result_json_path,
+            "nPanels": n_panels,
+            "nSeries": n_series,
             "completedAt": datetime.now().isoformat()
         }
 
@@ -296,6 +493,14 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        src_file = Path(original_path)
+        storage_dir = _storage_dir_from_original(src_file)
+        if not src_file.is_absolute():
+            src_file = storage_dir / src_file
+
+        failed_result_json = _build_failed_result_json(str(e), "unexpected_worker_error")
+        failed_result_json_path = _write_result_json_to_storage(failed_result_json, src_file, storage_dir)
+
         failed_payload = {
             "schemaVersion": 1,
             "jobId": job_id,
@@ -303,10 +508,10 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
             "messageId": f"failed-{message_id}-{uuid.uuid4().hex[:8]}",
             "requestMessageId": message_id,
             "workerId": WORKER_ID,
-            "status": "failed",
             "errorMessage": str(e),
             "errorCode": "unexpected_worker_error",
             "retryable": False,
+            "resultJsonPath": failed_result_json_path,
             "failedAt": datetime.now().isoformat()
         }
 
@@ -314,6 +519,33 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
     finally:
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=1)
+
+
+def _process_db_job(conn, job: Job) -> None:
+    print(f"[WORKER] Processing chart {job.chart_id} (DB mode)")
+    try:
+        result_json, _, n_panels, n_series = _execute_pipeline(job.chart_id, job.original_path)
+        _mark_db_done(conn, job, result_json, n_panels, n_series)
+        print(f"[WORKER] Chart {job.chart_id} done (DB mode)")
+    except Exception as e:
+        error_code = "unexpected_worker_error"
+        failed_result_json = _build_failed_result_json(str(e), error_code)
+        _mark_db_error(conn, job, str(e), error_code, failed_result_json)
+        print(f"[WORKER_ERROR] Chart {job.chart_id} failed (DB mode): {e}")
+
+
+def _run_db_poll_loop() -> int:
+    print("[WORKER] MQTT disabled; switching to DB polling mode.")
+    conn = _connect_db()
+    try:
+        while True:
+            job = _fetch_next_db_job(conn)
+            if job is None:
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+            _process_db_job(conn, job)
+    finally:
+        conn.close()
 
 
 def _job_worker(mqtt_client):
@@ -329,6 +561,13 @@ def _job_worker(mqtt_client):
         finally:
             # Говорим очереди: с этой задачей закончили, даже если она упала с ошибкой.
             _job_queue.task_done()
+
+
+def _create_mqtt_client():
+    callback_api_version = getattr(mqtt, "CallbackAPIVersion", None)
+    if callback_api_version is not None and hasattr(callback_api_version, "VERSION1"):
+        return mqtt.Client(callback_api_version.VERSION1)
+    return mqtt.Client()
 
 
 def on_connect(client, userdata, flags, rc):
@@ -368,10 +607,13 @@ def on_message(client, userdata, msg):
 
 
 def main():
+    if not MQTT_ENABLED:
+        return _run_db_poll_loop()
+
     print("[WORKER] Initializing MQTT client...")
     # Создаём MQTT-клиент. Это главный объект, через который worker слушает задачи
     # и потом отправляет статусы обратно: accepted, heartbeat, completed или failed.
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+    client = _create_mqtt_client()
     client.on_connect = on_connect
     client.on_message = on_message
 
@@ -390,10 +632,12 @@ def main():
         client.connect(MQTT_BROKER, MQTT_PORT, 60)
         print("[WORKER] Listening for jobs (MQTT mode)...")
         client.loop_forever()
+        return 0
     except ConnectionRefusedError:
         print(f"[FATAL] MQTT broker is not running on {MQTT_BROKER}:{MQTT_PORT}!")
         print("Start Eclipse Mosquitto locally or run the broker in Docker.")
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

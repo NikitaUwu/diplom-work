@@ -15,6 +15,11 @@ export class ImageCarousel {
 
   public items: CarouselItem[] = [];
   public currentIndex = 0;
+  public zoomOpen = false;
+  public zoomScale = 1;
+
+  private readonly minZoom = 0.5;
+  private readonly maxZoom = 4;
 
   public get safeItems(): CarouselItem[] {
     return Array.isArray(this.items) ? this.items.filter(Boolean) : [];
@@ -36,8 +41,17 @@ export class ImageCarousel {
     return this.currentItem ? this.currentIndex + 1 : 1;
   }
 
+  public get zoomPercent(): number {
+    return Math.round(this.zoomScale * 100);
+  }
+
+  public get zoomImageStyle(): string {
+    return `transform: scale(${this.zoomScale}); transform-origin: center center; max-height: 82vh;`;
+  }
+
   public itemsChanged(): void {
     this.currentIndex = 0;
+    this.closeZoom();
   }
 
   public prev(): void {
@@ -46,6 +60,7 @@ export class ImageCarousel {
     }
 
     this.currentIndex = (this.currentIndex - 1 + this.safeItems.length) % this.safeItems.length;
+    this.resetZoom();
   }
 
   public next(): void {
@@ -54,5 +69,43 @@ export class ImageCarousel {
     }
 
     this.currentIndex = (this.currentIndex + 1) % this.safeItems.length;
+    this.resetZoom();
+  }
+
+  public openZoom(): void {
+    if (!this.currentItem) {
+      return;
+    }
+
+    this.zoomOpen = true;
+    this.resetZoom();
+  }
+
+  public closeZoom(): void {
+    this.zoomOpen = false;
+    this.resetZoom();
+  }
+
+  public zoomIn(): void {
+    this.zoomScale = Math.min(this.maxZoom, Number((this.zoomScale + 0.25).toFixed(2)));
+  }
+
+  public zoomOut(): void {
+    this.zoomScale = Math.max(this.minZoom, Number((this.zoomScale - 0.25).toFixed(2)));
+  }
+
+  public resetZoom(): void {
+    this.zoomScale = 1;
+  }
+
+  public onZoomWheel(event: WheelEvent): boolean {
+    event.preventDefault();
+    if (event.deltaY < 0) {
+      this.zoomIn();
+    } else {
+      this.zoomOut();
+    }
+
+    return false;
   }
 }

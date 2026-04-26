@@ -169,6 +169,87 @@ public sealed class ProcessingJobStateServiceTests
     }
 
     [Fact]
+    public async Task ApplyCompletedAsync_LoadsResultJsonFromStorage_WhenPayloadContainsPath()
+    {
+        await using var db = CreateDbContext();
+        var chart = await SeedChartAsync(db, status: "processing");
+        var job = await SeedJobAsync(
+            db,
+            chart.Id,
+            status: "processing",
+            messageId: "request-storage",
+            workerId: "worker-a",
+            attempt: 1,
+            startedAt: DateTimeOffset.UtcNow.AddMinutes(-1),
+            lastHeartbeatAt: DateTimeOffset.UtcNow.AddSeconds(-10),
+            leasedUntil: DateTimeOffset.UtcNow.AddSeconds(30));
+        var tempFile = Path.Combine(Path.GetTempPath(), $"diplom-result-{Guid.NewGuid():N}.json");
+        var resultJson = new JsonObject
+        {
+            ["panels"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["id"] = "panel_0",
+                    ["series"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["id"] = "series_0",
+                            ["points"] = new JsonArray
+                            {
+                                new JsonArray(0, 0),
+                                new JsonArray(1, 1),
+                            },
+                        },
+                    },
+                },
+            },
+        };
+        await File.WriteAllTextAsync(tempFile, resultJson.ToJsonString());
+
+        try
+        {
+            var service = CreateService(db, leaseSeconds: 45);
+            var payload = new ProcessingEventPayload
+            {
+                MessageId = "completed-storage-1",
+                RequestMessageId = "request-storage",
+                JobId = job.Id,
+                ChartId = chart.Id,
+                WorkerId = "worker-a",
+                ResultJsonPath = tempFile,
+                NPanels = 1,
+                NSeries = 1,
+            };
+
+            var applied = await service.ApplyCompletedAsync(
+                "charts/process/completed",
+                payload,
+                ToJsonNode(payload),
+                CancellationToken.None);
+
+            var actualJob = await db.ProcessingJobs.SingleAsync();
+            var actualChart = await db.Charts.SingleAsync();
+
+            Assert.True(applied);
+            Assert.Equal("done", actualJob.Status);
+            Assert.NotNull(actualJob.ResultPayload);
+            Assert.Equal("done", actualChart.Status);
+            Assert.NotNull(actualChart.ResultJson);
+            Assert.Equal(1, actualChart.NPanels);
+            Assert.Equal(1, actualChart.NSeries);
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+            {
+                File.Delete(tempFile);
+            }
+        }
+    }
+
+    [Fact]
     public async Task ExpireTimedOutJobsAsync_MarksTimedOutJobAndChartAsError()
     {
         await using var db = CreateDbContext();
@@ -497,7 +578,8 @@ public sealed class ProcessingJobStateServiceTests
             MqttProcessRequestTopic = "charts/process/request",
         };
 
-        return new ProcessingJobStateService(db, options, NullLogger<ProcessingJobStateService>.Instance);
+        var chartStorageService = new ChartStorageService(options);
+        return new ProcessingJobStateService(db, options, chartStorageService, NullLogger<ProcessingJobStateService>.Instance);
     }
 
     private static TestAppDbContext CreateDbContext()

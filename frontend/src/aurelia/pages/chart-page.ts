@@ -2,14 +2,13 @@ import { resolve } from 'aurelia';
 import { IRouter, type IRouteableComponent } from '@aurelia/router-direct';
 import template from './chart-page.html?raw';
 import {
-  chartExportUrl,
   chartFileUrl,
   getChart,
   previewChartRandomSplinePoints,
   saveChartResult,
   type ChartCreateResponse,
-  type ChartExportFormat,
 } from '../../api/client';
+import { downloadSeriesCsv, downloadSeriesJson, hasExportableSeries } from '../shared/chart-export';
 import { buildArtifactsCarousel, chartStatusBadgeClass, chartStatusLabel, hasRenderableEditorResult } from '../shared/chart-utils';
 import { sessionState } from '../state/session-state';
 
@@ -31,6 +30,7 @@ export class ChartPage implements IRouteableComponent {
   public autoSplinePointCount = 0;
   public showOnlyAutoSplinePoints = false;
   public showAutoSplineHighlight = true;
+  public showAutoSplineInfo = false;
   public saveError = '';
   public saving = false;
   public showOriginalBackdrop = false;
@@ -40,6 +40,7 @@ export class ChartPage implements IRouteableComponent {
   private pollEpoch = 0;
 
   public readonly onEditorResultJsonChange = (next: unknown) => {
+    const hadAutoSpline = this.autoSplineSelectedPointCount > 0;
     this.setDraftResultJson(next);
     this.autoSplineHighlightResultJson = this.extractStoredAutoSplineResultJson(next);
     this.autoSplineError = '';
@@ -47,6 +48,9 @@ export class ChartPage implements IRouteableComponent {
     if (!this.autoSplineHighlightResultJson) {
       this.showOnlyAutoSplinePoints = false;
       this.showAutoSplineHighlight = true;
+      this.showAutoSplineInfo = false;
+    } else if (!hadAutoSpline) {
+      this.showAutoSplineInfo = true;
     }
   };
 
@@ -67,6 +71,7 @@ export class ChartPage implements IRouteableComponent {
     this.autoSplinePointCount = 0;
     this.showOnlyAutoSplinePoints = false;
     this.showAutoSplineHighlight = true;
+    this.showAutoSplineInfo = false;
     this.saveError = '';
     this.error = '';
     this.pollError = '';
@@ -78,6 +83,7 @@ export class ChartPage implements IRouteableComponent {
     }
 
     await this.loadOnce();
+    this.showAutoSplineInfo = this.hasAutoSplineResult;
     this.startPollingIfNeeded();
   }
 
@@ -161,12 +167,20 @@ export class ChartPage implements IRouteableComponent {
     return this.hasRenderableServerResult;
   }
 
-  public get canExport(): boolean {
-    return this.hasExportableResult && !this.dirty;
+  public get canExportAllPoints(): boolean {
+    return hasExportableSeries(this.editorResultJson);
+  }
+
+  public get canExportAutoSplinePoints(): boolean {
+    return hasExportableSeries(this.autoSplineResultJson, true);
   }
 
   public toggleBackdrop(): void {
     this.showOriginalBackdrop = !this.showOriginalBackdrop;
+  }
+
+  public dismissAutoSplineInfo(): void {
+    this.showAutoSplineInfo = false;
   }
 
   public toggleOnlyAutoSplinePoints(): void {
@@ -212,9 +226,11 @@ export class ChartPage implements IRouteableComponent {
       const nextDraft = this.withStoredAutoSpline(this.editorResultJson, preview.resultJson ?? null, this.autoSplinePointCount);
       this.autoSplineHighlightResultJson = this.extractStoredAutoSplineResultJson(nextDraft);
       this.autoSplinePointCount = this.deriveStoredAutoSplinePointCount(this.autoSplineHighlightResultJson);
+      this.showAutoSplineInfo = this.autoSplinePointCount > 0;
       this.setDraftResultJson(nextDraft);
     } catch (error) {
       this.autoSplineHighlightResultJson = null;
+      this.showAutoSplineInfo = false;
       this.autoSplineError = error instanceof Error ? error.message : 'Ошибка построения автосплайна';
     } finally {
       this.autoSplineLoading = false;
@@ -235,7 +251,8 @@ export class ChartPage implements IRouteableComponent {
       this.editedResultJson = null;
       this.autoSplineHighlightResultJson = this.extractStoredAutoSplineResultJson(fresh.resultJson ?? null);
       this.autoSplineError = '';
-      this.autoSplinePointCount = 0;
+      this.autoSplinePointCount = this.deriveStoredAutoSplinePointCount(this.autoSplineHighlightResultJson);
+      this.showAutoSplineInfo = this.autoSplinePointCount > 0;
     } catch (error) {
       this.saveError = error instanceof Error ? error.message : 'Ошибка сохранения';
     } finally {
@@ -243,8 +260,32 @@ export class ChartPage implements IRouteableComponent {
     }
   }
 
-  public exportUrl(format: ChartExportFormat): string {
-    return chartExportUrl(this.chartId, format);
+  public exportAllPointsCsv(): void {
+    const ok = downloadSeriesCsv(this.editorResultJson, `chart-${this.chartId}-all-points.csv`);
+    if (!ok) {
+      this.saveError = 'Не удалось экспортировать все точки: данные отсутствуют.';
+    }
+  }
+
+  public exportAllPointsJson(): void {
+    const ok = downloadSeriesJson(this.editorResultJson, `chart-${this.chartId}-all-points.json`);
+    if (!ok) {
+      this.saveError = 'Не удалось экспортировать все точки: данные отсутствуют.';
+    }
+  }
+
+  public exportAutoSplinePointsCsv(): void {
+    const ok = downloadSeriesCsv(this.autoSplineResultJson, `chart-${this.chartId}-support-points.csv`, true);
+    if (!ok) {
+      this.saveError = 'Не удалось экспортировать опорные точки: автосплайн ещё не построен.';
+    }
+  }
+
+  public exportAutoSplinePointsJson(): void {
+    const ok = downloadSeriesJson(this.autoSplineResultJson, `chart-${this.chartId}-support-points.json`, true);
+    if (!ok) {
+      this.saveError = 'Не удалось экспортировать опорные точки: автосплайн ещё не построен.';
+    }
   }
 
   private setDraftResultJson(next: unknown): void {
@@ -365,7 +406,11 @@ export class ChartPage implements IRouteableComponent {
       return null;
     }
 
-    return { panels: this.cloneJsonValue(panels) };
+    const selectedPointCount = Number((raw as Record<string, unknown>).selected_point_count ?? 0);
+    return {
+      selected_point_count: Number.isFinite(selectedPointCount) && selectedPointCount > 0 ? Math.round(selectedPointCount) : undefined,
+      panels: this.cloneJsonValue(panels),
+    };
   }
 
   private deriveStoredAutoSplinePointCount(source: unknown): number {

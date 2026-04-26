@@ -674,6 +674,7 @@ export default function GraphEditor({
   const [err, setErr] = useState<string | null>(null);
 
   const [pointRadius, setPointRadius] = useState(5);
+  const [showSidebar, setShowSidebar] = useState(true);
   const [hover, setHover] = useState<null | { cx: number; cy: number; x: number; y: number; seriesName: string }>(
     null
   );
@@ -693,6 +694,7 @@ export default function GraphEditor({
   const [newNameInput, setNewNameInput] = useState("");
 
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const editorViewportRef = useRef<HTMLDivElement | null>(null);
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null);
   const [editorWidthScale, setEditorWidthScale] = useState(1);
   const [editorHeightScale, setEditorHeightScale] = useState(1);
@@ -755,7 +757,6 @@ export default function GraphEditor({
 
     let cancelled = false;
     const image = new window.Image();
-    image.crossOrigin = "use-credentials";
 
     image.onload = () => {
       if (cancelled || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
@@ -793,6 +794,7 @@ export default function GraphEditor({
   }, [showBackdrop]);
   const previewTimerRef = useRef<number | null>(null);
   const previewRequestRef = useRef(0);
+  const [maxEditorWidth, setMaxEditorWidth] = useState<number | null>(null);
 
   const panel0 = panels[0] ?? { series: [] };
   const seriesList = panel0.series;
@@ -805,6 +807,30 @@ export default function GraphEditor({
   useEffect(() => {
     setEditableHighlightPanels(highlightPanels);
   }, [highlightPanels]);
+
+  useEffect(() => {
+    if (compactMode) {
+      setShowSidebar(false);
+      return;
+    }
+
+    setShowSidebar(true);
+  }, [compactMode]);
+
+  useEffect(() => {
+    const element = editorViewportRef.current;
+    if (!element) return;
+
+    const update = () => {
+      setMaxEditorWidth(Math.max(MIN_EDITOR_WINDOW_WIDTH, Math.floor(element.clientWidth)));
+    };
+
+    update();
+
+    const observer = new ResizeObserver(() => update());
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (activeSeriesId && seriesList.some((s) => s.id === activeSeriesId)) return;
@@ -1060,6 +1086,10 @@ export default function GraphEditor({
   }, [baseOverlayContentBox, basePlotSize.h, basePlotSize.w, editorHeightScale, editorWidthScale]);
 
   const windowBox = contentBox;
+  const visibleWindowWidth = Math.max(
+    MIN_EDITOR_WINDOW_WIDTH,
+    Math.min(windowBox.w, maxEditorWidth ?? windowBox.w)
+  );
 
   const overlayCanvasScale = useMemo(() => {
     if (!overlayLocked || !imageSize) return null;
@@ -1070,13 +1100,18 @@ export default function GraphEditor({
   }, [contentBox.h, contentBox.w, imageSize, overlayLocked]);
 
   const applyEditorWindowSize = (nextWidth: number, nextHeight: number) => {
+    const boundedWidth = Math.max(
+      MIN_EDITOR_WINDOW_WIDTH,
+      Math.min(nextWidth, maxEditorWidth ?? nextWidth)
+    );
+
     if (baseOverlayContentBox) {
-      setEditorWidthScale(Math.max(MIN_EDITOR_WINDOW_SCALE, nextWidth / Math.max(baseOverlayContentBox.w, 1)));
+      setEditorWidthScale(Math.max(MIN_EDITOR_WINDOW_SCALE, boundedWidth / Math.max(baseOverlayContentBox.w, 1)));
       setEditorHeightScale(Math.max(MIN_EDITOR_WINDOW_SCALE, nextHeight / Math.max(baseOverlayContentBox.h, 1)));
       return;
     }
 
-    const plotWidth = Math.max(50, nextWidth - EDITOR_MARGIN.l - EDITOR_MARGIN.r);
+    const plotWidth = Math.max(50, boundedWidth - EDITOR_MARGIN.l - EDITOR_MARGIN.r);
     const plotHeight = Math.max(50, nextHeight - EDITOR_MARGIN.t - EDITOR_MARGIN.b);
     setEditorWidthScale(Math.max(MIN_EDITOR_WINDOW_SCALE, plotWidth / Math.max(basePlotSize.w, 1)));
     setEditorHeightScale(Math.max(MIN_EDITOR_WINDOW_SCALE, plotHeight / Math.max(basePlotSize.h, 1)));
@@ -2352,7 +2387,7 @@ export default function GraphEditor({
           </Button>
         )}
         <Button
-          variant={mode === "delete-point" ? "primary" : "secondary"}
+          variant="secondary"
           type="button"
           onClick={() => {
             setErr(null);
@@ -2368,17 +2403,28 @@ export default function GraphEditor({
           }}
           disabled={gridDragAxis !== null || panMode}
           title="Режим удаления: двойной клик по точке или выделение рамкой удаляет точки"
+          className={
+            mode === "delete-point"
+              ? "border-blue-400 bg-blue-100 text-blue-900 hover:bg-blue-200 dark:border-blue-500 dark:bg-blue-950/50 dark:text-blue-200 dark:hover:bg-blue-900/70"
+              : undefined
+          }
         >
-          - точка
+          Удалить точки
         </Button>
 
         <Button variant="secondary" type="button" onClick={addSeries}>
-          + кривая
+          Добавить кривую
         </Button>
 
-        <div className="rounded-xl bg-white px-3 py-2 text-sm ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
+        <div className="rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-white to-indigo-50 px-4 py-2.5 text-sm font-semibold text-sky-900 shadow-sm ring-1 ring-sky-100 dark:border-sky-900/50 dark:from-sky-950/40 dark:via-slate-950 dark:to-indigo-950/30 dark:text-sky-100 dark:ring-sky-900/30">
           Кубический сплайн
         </div>
+
+        {!compactMode && (
+          <Button variant="secondary" type="button" onClick={() => setShowSidebar((value) => !value)}>
+            {showSidebar ? "Скрыть меню" : "Показать меню"}
+          </Button>
+        )}
 
         {/* dropdown: show/hide curves */}
         <div className="relative" ref={visRef}>
@@ -2574,7 +2620,7 @@ export default function GraphEditor({
       </div>
 
       <div className={compactMode ? "w-full overflow-auto" : "flex flex-col gap-4 md:flex-row md:items-start"}>
-        {!compactMode && (
+        {!compactMode && showSidebar && (
           <aside className="w-full shrink-0 rounded-2xl bg-white p-4 ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800 md:w-72">
             <div className="flex items-center justify-between gap-2">
               <div>
@@ -2663,12 +2709,59 @@ export default function GraphEditor({
           </aside>
         )}
 
-        <div className="w-full overflow-auto">
+        <div ref={editorViewportRef} className="w-full overflow-auto">
           <div
             className="relative mx-auto overflow-auto rounded-2xl bg-white ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800"
-            style={{ width: windowBox.w, height: windowBox.h }}
+            style={{ width: visibleWindowWidth, height: windowBox.h }}
           >
-            <div className="relative" style={{ width: contentBox.w, height: contentBox.h }}>
+            <div className="relative isolate" style={{ width: contentBox.w, height: contentBox.h }}>
+            {showBackdrop && backdropImageUrl && backdropFrame ? (
+              <div
+                className="pointer-events-none absolute overflow-hidden"
+                style={
+                  overlayLocked
+                    ? {
+                        left: 0,
+                        top: 0,
+                        width: contentBox.w,
+                        height: contentBox.h,
+                        opacity: 0.14,
+                        zIndex: 0,
+                      }
+                    : {
+                        left: layout.l,
+                        top: layout.t,
+                        width: layout.pw,
+                        height: layout.ph,
+                        opacity: 0.1,
+                        zIndex: 0,
+                      }
+                }
+              >
+                <img
+                  src={backdropImageUrl}
+                  alt=""
+                  draggable={false}
+                  className="absolute select-none"
+                  style={
+                    overlayLocked
+                      ? {
+                          left: 0,
+                          top: 0,
+                          width: contentBox.w,
+                          height: contentBox.h,
+                        }
+                      : {
+                          left: backdropFrame.x - layout.l,
+                          top: backdropFrame.y - layout.t,
+                          width: backdropFrame.width,
+                          height: backdropFrame.height,
+                        }
+                  }
+                />
+              </div>
+            ) : null}
+
             {hover && (
               <div
                 className="pointer-events-none absolute z-20 rounded-xl bg-slate-900 px-3 py-2 text-xs text-white shadow-sm"
@@ -2686,6 +2779,7 @@ export default function GraphEditor({
               className="block touch-none"
               width={contentBox.w}
               height={contentBox.h}
+              preserveAspectRatio="none"
               style={{ cursor: backdropMoveMode ? (backdropDragRef.current ? "grabbing" : "grab") : panMode ? "grab" : pendingAssignName ? "crosshair" : mode === "delete-point" ? "crosshair" : "default" }}
               onPointerDown={onSvgPointerDown}
               onDoubleClick={onSvgDoubleClick}
@@ -2704,23 +2798,8 @@ export default function GraphEditor({
               y={layout.t}
               width={layout.pw}
               height={layout.ph}
-              className="fill-slate-50 dark:fill-slate-950"
+              className={showBackdrop ? "fill-transparent" : "fill-slate-50 dark:fill-slate-950"}
             />
-
-            {showBackdrop && backdropImageUrl && backdropFrame ? (
-              <image
-                href={backdropImageUrl}
-                crossOrigin="use-credentials"
-                x={backdropFrame.x}
-                y={backdropFrame.y}
-                width={backdropFrame.width}
-                height={backdropFrame.height}
-                preserveAspectRatio="none"
-                opacity={overlayLocked ? 1 : 0.35}
-                pointerEvents="none"
-                clipPath={overlayLocked ? undefined : `url(#${clipId})`}
-              />
-            ) : null}
 
           {ticksX.map((t, i) => {
             const x = scale.mapX(t);
@@ -2826,20 +2905,6 @@ export default function GraphEditor({
               );
             })}
 
-            {highlightPaths.map((path) => (
-              <path
-                key={`highlight_path_${path.id}`}
-                d={path.d}
-                fill="none"
-                className="stroke-amber-500 dark:stroke-amber-300"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeDasharray="5 4"
-                pointerEvents="none"
-              />
-            ))}
-
             {!showOnlyHighlightPoints && seriesList.map((s) => {
               if (!visibleIds.has(s.id)) return null;
               const cIdx = colorById[s.id] ?? 0;
@@ -2874,6 +2939,20 @@ export default function GraphEditor({
               });
             })}
 
+            {highlightPaths.map((path) => (
+              <path
+                key={`highlight_path_${path.id}`}
+                d={path.d}
+                fill="none"
+                className="stroke-amber-500 dark:stroke-sky-400"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeDasharray="5 4"
+                pointerEvents="none"
+              />
+            ))}
+
             {highlightPoints.map((point) => (
               <g
                 key={point.key}
@@ -2888,14 +2967,14 @@ export default function GraphEditor({
                   cx={point.cx}
                   cy={point.cy}
                   r={pointRadius + 5}
-                  className="fill-amber-400/25 dark:fill-amber-300/25"
+                  className="fill-amber-400/25 dark:fill-sky-400/20"
                   stroke="none"
                 />
                 <circle
                   cx={point.cx}
                   cy={point.cy}
                   r={pointRadius + 2.5}
-                  className="fill-none stroke-amber-500 dark:stroke-amber-300"
+                  className="fill-none stroke-amber-500 dark:stroke-sky-400"
                   strokeWidth={2.5}
                   strokeDasharray="3 2"
                 />
@@ -2903,7 +2982,7 @@ export default function GraphEditor({
                   cx={point.cx}
                   cy={point.cy}
                   r={pointRadius + 0.5}
-                  className="fill-orange-500 dark:fill-orange-300"
+                  className="fill-orange-500 dark:fill-sky-400"
                   stroke="#111827"
                   strokeWidth={2}
                 />

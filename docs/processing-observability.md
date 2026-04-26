@@ -1,8 +1,8 @@
-# Processing Observability
+# Наблюдаемость processing-контура
 
-The backend currently exposes only the operational endpoints that are backed by the compact database schema and live processing state.
+Backend сейчас отдает только те operational endpoints, которые реально поддерживаются текущей схемой БД и живым состоянием обработки.
 
-## Active endpoints
+## Актуальные endpoints
 
 - `GET /health`
 - `GET /metrics/processing`
@@ -11,47 +11,39 @@ The backend currently exposes only the operational endpoints that are backed by 
 - `GET /admin/processing/diagnostics`
 - `GET /admin/processing/dashboard`
 
-## Endpoint purpose
+## Что они показывают
 
 ### `/health`
 
-Simple liveness probe:
+Простая liveness-проверка:
 
-- returns `{ "status": "ok" }`
+- возвращает `{ "status": "ok" }`
 
 ### `/metrics/processing`
 
-Compact machine-readable counters for:
+Машиночитаемые счетчики по:
 
-- `processing_jobs` by status
-- `mqtt_messages` by status
-- `errorCode` distribution
-- retryable vs terminal error jobs
-- queued ready vs delayed jobs
+- `processing_jobs` по статусам
+- `mqtt_messages` по статусам
+- распределению `errorCode`
+- retryable и terminal ошибкам
+- queued ready и delayed задачам
 
 ### `/metrics/processing/alerts`
 
-Derived operational alerts built from the current database state.
+Снимок operational alerts, вычисленный из текущего состояния БД.
 
-The backend currently raises alerts for:
+Сейчас backend поднимает alerts для:
 
-- stale processing jobs with expired lease
-- queued jobs that stayed ready for too long
-- stale pending outbound MQTT messages
-- outbound MQTT publish errors
-- recent spikes of failed jobs
-
-Each alert contains:
-
-- `code`
-- `severity`
-- `message`
-- `count`
-- `samples`
+- processing-задач с истекшим lease
+- queued-задач, которые слишком долго ждут выполнения
+- застарелых pending MQTT-сообщений
+- ошибок публикации MQTT-сообщений
+- всплеска failed-задач
 
 ### `/admin/processing/diagnostics`
 
-Admin-only human-oriented diagnostics snapshot with top problematic records:
+Admin-only диагностика с проблемными записями:
 
 - stale processing jobs
 - queued ready jobs
@@ -60,57 +52,52 @@ Admin-only human-oriented diagnostics snapshot with top problematic records:
 - errored outbound MQTT messages
 - recent inbound MQTT messages
 
-This endpoint is intended for fast incident triage without manual SQL.
-
 ### `/admin/processing/overview`
 
-Admin-only combined payload that returns:
+Admin-only объединенный ответ:
 
 - `metrics`
 - `alerts`
 - `diagnostics`
 
-Use it when a client or dashboard should read one protected endpoint instead of combining multiple requests.
-
 ### `/admin/processing/dashboard`
 
-Admin-only HTML dashboard with auto-refresh every 15 seconds.
+HTML dashboard с автообновлением, построенный поверх этих же данных.
 
-It renders:
+## Что меняется при отключенном MQTT
 
-- top-level system snapshot cards
-- operational alerts
-- stale/queued/failed job lists
-- pending/error MQTT message lists
-- recent inbound MQTT messages
+Если `App.MqttEnabled = false`:
 
-## Removed endpoints
+- endpoints продолжают работать
+- блоки по `processing_jobs` остаются актуальными
+- блоки по `mqtt_messages` обычно пустые или почти пустые
+- alerts про pending и errored MQTT messages в норме отсутствуют
 
-The following routes were removed because they were no longer backed by the compact schema and only returned empty or stubbed responses:
+## Удаленные endpoints
+
+Следующие маршруты удалены как неактуальные:
 
 - `GET /admin/processing/alerts/history`
 - `GET /admin/processing/notifier/status`
 - `GET /admin/processing/alerts/{eventId}/preview`
 - `POST /admin/processing/notifier/dispatch`
 
-The compact schema does not persist alert history or notification queues, so these APIs were intentionally dropped.
+Они больше не поддерживаются компактной схемой.
 
-## Admin access rules
+## Правила доступа
 
-- when `AuthEnabled=false`, admin-only operational endpoints are available through the local dev user flow
-- when `AuthEnabled=true` and the current user has `role=admin`, access is allowed
-- otherwise the endpoint returns `403 Admin access required`
+- при `AuthEnabled=false` admin-endpoints доступны через локальный dev-flow
+- при `AuthEnabled=true` нужен пользователь с `role=admin`
+- иначе возвращается `403`
 
-## Config knobs still used by the active monitoring flow
+## Важные настройки
 
-- `AdminEmails` (bootstrap only)
 - `ProcessingAlertQueuedReadyAgeSeconds`
 - `ProcessingAlertOutboxPendingAgeSeconds`
 - `ProcessingAlertRecentFailureWindowMinutes`
 - `ProcessingAlertRecentFailureCountThreshold`
 - `ProcessingDiagnosticsItemLimit`
 
-## Recommended next step
+## Практический смысл
 
-Integrate `/metrics/processing/alerts`, `/metrics/processing`, or `/admin/processing/overview`
-with external monitoring and tune thresholds based on real runs of the MQTT processing pipeline.
+Для локальной диагностики обычно достаточно `GET /health`, `GET /metrics/processing` и `GET /admin/processing/overview`.

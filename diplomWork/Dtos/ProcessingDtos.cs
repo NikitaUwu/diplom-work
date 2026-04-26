@@ -18,6 +18,8 @@ public sealed class ProcessingEventPayload
 
     public JsonNode? ResultJson { get; set; }
 
+    public string? ResultJsonPath { get; set; }
+
     public int? NPanels { get; set; }
 
     public int? NSeries { get; set; }

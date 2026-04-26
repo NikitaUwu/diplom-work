@@ -14,7 +14,6 @@ export class MyApp implements IRouteableComponent {
     { path: '/upload', component: () => import('./pages/upload-page'), title: 'Загрузка' },
     { path: '/results', component: () => import('./pages/results-page'), title: 'Результаты' },
     { path: '/charts/:id', component: () => import('./pages/chart-page'), title: 'График' },
-    { path: '/charts/:id/spline-points', component: () => import('./pages/spline-points-page'), title: 'Сплайн по N точкам' },
   ];
 
   private readonly router = resolve(IRouter);

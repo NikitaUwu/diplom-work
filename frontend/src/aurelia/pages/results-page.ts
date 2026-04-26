@@ -2,13 +2,12 @@ import { resolve } from 'aurelia';
 import { IRouter, type IRouteableComponent } from '@aurelia/router-direct';
 import template from './results-page.html?raw';
 import {
-  chartExportUrl,
   deleteChart,
   listCharts,
   type ChartCreateResponse,
-  type ChartExportFormat,
   type ChartStatus,
 } from '../../api/client';
+import { downloadSeriesCsv, downloadSeriesJson, extractAutoSplinePayload, hasExportableSeries } from '../shared/chart-export';
 import { buildArtifactsCarousel, chartStatusBadgeClass, chartStatusLabel } from '../shared/chart-utils';
 import { sessionState } from '../state/session-state';
 
@@ -75,8 +74,28 @@ export class ResultsPage implements IRouteableComponent {
     return buildArtifactsCarousel(chart);
   }
 
-  public exportUrl(chartId: number, format: ChartExportFormat): string {
-    return chartExportUrl(chartId, format);
+  public canExportAllPoints(chart: ChartCreateResponse): boolean {
+    return hasExportableSeries(chart.resultJson ?? null);
+  }
+
+  public canExportAutoSplinePoints(chart: ChartCreateResponse): boolean {
+    return hasExportableSeries(extractAutoSplinePayload(chart.resultJson ?? null), true);
+  }
+
+  public exportAllPointsCsv(chart: ChartCreateResponse): void {
+    downloadSeriesCsv(chart.resultJson ?? null, `chart-${chart.id}-all-points.csv`);
+  }
+
+  public exportAllPointsJson(chart: ChartCreateResponse): void {
+    downloadSeriesJson(chart.resultJson ?? null, `chart-${chart.id}-all-points.json`);
+  }
+
+  public exportAutoSplinePointsCsv(chart: ChartCreateResponse): void {
+    downloadSeriesCsv(extractAutoSplinePayload(chart.resultJson ?? null), `chart-${chart.id}-support-points.csv`, true);
+  }
+
+  public exportAutoSplinePointsJson(chart: ChartCreateResponse): void {
+    downloadSeriesJson(extractAutoSplinePayload(chart.resultJson ?? null), `chart-${chart.id}-support-points.json`, true);
   }
 
   public formatDate(value: string): string {

@@ -1,34 +1,49 @@
-# Compact database schema
+# Компактная схема БД
 
-The active backend schema is intentionally compact. It keeps only business data and the minimal MQTT audit/retry table.
+Текущая схема backend намеренно упрощена. В ней остались только основные бизнес-таблицы и единая таблица MQTT-сообщений.
 
-## Tables
+## Таблицы
 
-| Table | Purpose |
+| Таблица | Назначение |
 |---|---|
-| `users` | Users, roles, password hashes and activity flag. |
-| `charts` | Uploaded charts, file metadata, processing status and `result_json`. |
-| `processing_jobs` | ML processing jobs, status, lease, heartbeat, retry state and worker result payload. |
-| `mqtt_messages` | Unified MQTT message table for both outbound backend requests and inbound ML events. |
+| `users` | Пользователи, роли, пароль, флаг активности |
+| `charts` | Загруженные графики, файловые метаданные, статус обработки и `result_json` |
+| `processing_jobs` | Задачи обработки, попытки, lease, heartbeat, результат worker |
+| `mqtt_messages` | Исходящие и входящие MQTT-сообщения |
 
-## Removed tables
+## Связи
 
-The previous separate tables `outbox_messages`, `inbox_messages`, `processing_alert_states` and `processing_alert_events` are no longer part of the active EF Core model.
+- один `user` может иметь много `charts`
+- один `chart` может иметь много `processing_jobs`
+- один `processing_job` может иметь много `mqtt_messages`
 
-`mqtt_messages.direction` replaces the old split:
+## Особенности
 
-- `out` means backend -> ML messages, formerly outbox.
-- `in` means ML -> backend messages, formerly inbox.
+- `mqtt_messages` используется только в MQTT-режиме
+- при `App.MqttEnabled = false` backend и worker могут продолжать работать без активного использования `mqtt_messages`
+- alert history и notification queue в БД больше не хранятся
 
-Alert snapshots are now derived from `processing_jobs` and `mqtt_messages` at request time. Alert history and notification queue are not persisted in the compact schema.
+## Что было убрано
 
-## ER diagram
+Из активной EF Core-модели удалены:
+
+- `outbox_messages`
+- `inbox_messages`
+- `processing_alert_states`
+- `processing_alert_events`
+
+Логика старых `outbox` и `inbox` объединена в `mqtt_messages`:
+
+- `direction = out` — сообщения backend -> worker
+- `direction = in` — сообщения worker -> backend
+
+## ER-диаграмма
 
 ```mermaid
 erDiagram
     USERS ||--o{ CHARTS : uploads
     CHARTS ||--o{ PROCESSING_JOBS : has
-    PROCESSING_JOBS ||--o{ MQTT_MESSAGES : relates_to
+    PROCESSING_JOBS ||--o{ MQTT_MESSAGES : has
 
     USERS {
         int id PK

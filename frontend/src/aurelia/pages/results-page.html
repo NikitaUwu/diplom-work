@@ -57,13 +57,6 @@
               Открыть
             </a>
 
-            <a
-              if.bind="chart.status === 'done'"
-              load.bind="`/charts/${chart.id}/spline-points`"
-              class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
-              Сплайн по N
-            </a>
-
             <button
               type="button"
               click.trigger="deleteItem(chart.id)"
@@ -89,11 +82,35 @@
               ${chart.errorMessage}
             </div>
 
-            <div if.bind="chart.status === 'done'" class="mt-4 grid grid-cols-2 gap-2">
-              <a attr.href.bind="exportUrl(chart.id, 'csv')" class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">CSV</a>
-              <a attr.href.bind="exportUrl(chart.id, 'txt')" class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">TXT</a>
-              <a attr.href.bind="exportUrl(chart.id, 'json')" class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">JSON</a>
-              <a attr.href.bind="exportUrl(chart.id, 'table_csv')" class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">TABLE</a>
+            <div if.bind="chart.status === 'done'" class="mt-4 grid grid-cols-1 gap-2">
+              <button
+                type="button"
+                click.trigger="exportAllPointsCsv(chart)"
+                disabled.bind="!canExportAllPoints(chart)"
+                class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+                Все точки CSV
+              </button>
+              <button
+                type="button"
+                click.trigger="exportAllPointsJson(chart)"
+                disabled.bind="!canExportAllPoints(chart)"
+                class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+                Все точки JSON
+              </button>
+              <button
+                type="button"
+                click.trigger="exportAutoSplinePointsCsv(chart)"
+                disabled.bind="!canExportAutoSplinePoints(chart)"
+                class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+                Опорные точки CSV
+              </button>
+              <button
+                type="button"
+                click.trigger="exportAutoSplinePointsJson(chart)"
+                disabled.bind="!canExportAutoSplinePoints(chart)"
+                class="inline-flex h-10 items-center justify-center rounded-xl bg-slate-900 px-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+                Опорные точки JSON
+              </button>
             </div>
           </div>
         </div>
