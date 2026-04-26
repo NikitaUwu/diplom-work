@@ -1,11 +1,15 @@
 using DiplomWork.Configuration;
 using DiplomWork.Exceptions;
 using DiplomWork.Models;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace DiplomWork.Services;
 
 public sealed class ChartStorageService
 {
+    public const string DataJsonFileName = "data.json";
+
     private readonly AppOptions _options;
 
     public ChartStorageService(AppOptions options)
@@ -81,6 +85,23 @@ public sealed class ChartStorageService
         var originalPath = ResolveInStorage(chart.OriginalPath, allowAbsolute: true);
         return EnsureInStorage(Path.GetDirectoryName(originalPath)
             ?? throw new ApiProblemException(StatusCodes.Status404NotFound, "Chart files are missing"));
+    }
+
+    public string GetDataJsonPath(Chart chart)
+    {
+        var chartDirectory = GetChartDirectory(chart.UserId, chart.Id);
+        return EnsureInStorage(Path.Combine(chartDirectory, DataJsonFileName));
+    }
+
+    public async Task WriteDataJsonAsync(Chart chart, JsonNode resultJson, CancellationToken cancellationToken = default)
+    {
+        var dataJsonPath = GetDataJsonPath(chart);
+        var content = resultJson.ToJsonString(new JsonSerializerOptions
+        {
+            WriteIndented = true,
+        });
+
+        await File.WriteAllTextAsync(dataJsonPath, content, cancellationToken);
     }
 
     public string ResolveArtifactPath(Chart chart, string rawPath)

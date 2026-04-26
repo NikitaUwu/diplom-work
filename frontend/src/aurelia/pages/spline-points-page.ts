@@ -86,7 +86,7 @@ export class SplinePointsPage implements IRouteableComponent {
     this.buildError = '';
 
     try {
-      const preview = await previewChartSplinePoints(this.chart.id, this.pointCount);
+      const preview = await previewChartSplinePoints(this.chart.id, this.pointCount, this.editorResultJson);
       this.previewResultJson = preview.resultJson ?? null;
     } catch (error) {
       this.buildError = error instanceof Error ? error.message : 'Ошибка построения предпросмотра сплайна';

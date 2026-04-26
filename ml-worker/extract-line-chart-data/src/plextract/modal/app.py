@@ -23,7 +23,7 @@ def run_pipeline(input_dir, output_dir, run_id):
     BASE_INPUT = f"/data/{input_dir}" 
     BASE_OUTPUT = f"/data/{output_dir}"
 
-    os.makedirs(BASE_OUTPUT, exist_ok=True)
+    os.makedirs(BASE_OUTPUT)
     vol.commit()
     vol.reload()
 
@@ -34,8 +34,8 @@ def run_pipeline(input_dir, output_dir, run_id):
     print("Creating output folders...")
     for file in input_files:
         file_dir = f"{BASE_OUTPUT}/{file}"
-        os.makedirs(f"{file_dir}/chartdete", exist_ok=True)
-        os.makedirs(f"{file_dir}/lineformer", exist_ok=True)
+        os.makedirs(f"{file_dir}/chartdete")
+        os.makedirs(f"{file_dir}/lineformer")
 
     vol.commit()
 

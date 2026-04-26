@@ -136,6 +136,9 @@ export class CompactGraphEditor {
   public deleteSelectionBox: DeleteSelectionBox | null = null;
   public editorWidth = DEFAULT_EDITOR_BOX.w;
   public editorHeight = DEFAULT_EDITOR_BOX.h;
+  public availableNames: string[] = [];
+  public pendingAssignName: string | null = null;
+  public newNameInput = '';
 
   public svgElement?: SVGSVGElement;
   public visElement?: HTMLDivElement;
@@ -219,6 +222,9 @@ export class CompactGraphEditor {
   }
 
   public get chartHint(): string {
+    if (this.pendingAssignName !== null) {
+      return `Назначение имени «${this.pendingAssignName}»: кликните по линии или точке кривой`;
+    }
     return this.modeState === 'delete-point'
       ? 'Режим: двойной клик по точке или выделение рамкой для удаления'
       : 'Двойной клик: добавить точку';
@@ -229,7 +235,12 @@ export class CompactGraphEditor {
   }
 
   public get svgCursor(): string {
+    if (this.pendingAssignName !== null) return 'crosshair';
     return this.modeState === 'delete-point' ? 'crosshair' : 'default';
+  }
+
+  public get assignMode(): boolean {
+    return this.pendingAssignName !== null;
   }
 
   public get clipPathRef(): string {
@@ -502,6 +513,104 @@ export class CompactGraphEditor {
     this.hover = null;
   }
 
+  public isNamePending(name: string): boolean {
+    return this.pendingAssignName === name;
+  }
+
+  public selectNameToAssign(name: string): void {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    if (this.pendingAssignName === trimmed) {
+      this.pendingAssignName = null;
+      return;
+    }
+
+    this.pendingAssignName = trimmed;
+    this.hover = null;
+
+    if (this.modeState === 'delete-point') {
+      this.modeState = 'select';
+      this.deleteSelectionBox = null;
+      this.deleteDragState = null;
+    }
+  }
+
+  public cancelAssignMode(): void {
+    this.pendingAssignName = null;
+  }
+
+  public onNewNameInput(event: Event): void {
+    this.newNameInput = (event.target as HTMLInputElement | null)?.value ?? '';
+  }
+
+  public onNewNameKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this.addCustomName();
+    }
+  }
+
+  public addCustomName(): void {
+    const name = this.newNameInput.trim().slice(0, MAX_SERIES_NAME);
+    this.newNameInput = '';
+    if (!name) return;
+    if (this.availableNames.includes(name)) return;
+    this.availableNames = [...this.availableNames, name];
+  }
+
+  public removeNameFromPool(name: string): void {
+    this.availableNames = this.availableNames.filter((item) => item !== name);
+    if (this.pendingAssignName === name) {
+      this.pendingAssignName = null;
+    }
+  }
+
+  private applyPendingNameTo(seriesId: string): boolean {
+    const name = this.pendingAssignName;
+    if (!name) return false;
+
+    const target = this.seriesList.find((series) => series.id === seriesId);
+    if (!target) return false;
+
+    this.pendingAssignName = null;
+    this.activeSeriesId = seriesId;
+    this.visibleIds.add(seriesId);
+
+    if (target.name === name) return true;
+
+    this.captureUndoSnapshot();
+    const nextPanels = this.clonePanels(this.panels);
+    const series = nextPanels[0]?.series.find((item) => item.id === seriesId);
+    if (!series) return true;
+
+    series.name = name;
+    this.commitLocalPanels(nextPanels, false);
+    return true;
+  }
+
+  private syncAvailableNamesFromSeries(reset: boolean): void {
+    const fromSeries = Array.from(
+      new Set(
+        this.seriesList
+          .map((series) => (series.name ?? '').trim())
+          .filter((name) => name.length > 0),
+      ),
+    );
+
+    if (reset) {
+      this.availableNames = fromSeries;
+      return;
+    }
+
+    const existing = new Set(this.availableNames);
+    const merged = [...this.availableNames];
+    for (const name of fromSeries) {
+      if (!existing.has(name)) merged.push(name);
+    }
+    this.availableNames = merged;
+  }
+
   public onActiveSeriesChange(event: Event): void {
     const value = (event.target as HTMLSelectElement | null)?.value ?? '';
     if (!value) {
@@ -543,6 +652,7 @@ export class CompactGraphEditor {
     this.selection = null;
     this.deleteSelectionBox = null;
     this.deleteDragState = null;
+    this.pendingAssignName = null;
     this.modeState = this.modeState === 'delete-point' ? 'select' : 'delete-point';
   }
 
@@ -705,6 +815,10 @@ export class CompactGraphEditor {
       this.activeSeriesId = this.seriesList[0].id;
     }
 
+    if (this.pendingAssignName !== null) {
+      return;
+    }
+
     if (!this.fullMode || this.modeState !== 'delete-point' || event.button !== 0) {
       return;
     }
@@ -729,7 +843,7 @@ export class CompactGraphEditor {
     this.lastCanvasAddKey = dedupeKey;
     this.lastCanvasAddAt = now;
 
-    if (!this.fullMode || this.modeState === 'delete-point') {
+    if (!this.fullMode || this.modeState === 'delete-point' || this.pendingAssignName !== null) {
       return;
     }
 
@@ -781,6 +895,13 @@ export class CompactGraphEditor {
   }
 
   public onPointPointerDown(event: PointerEvent, seriesId: string): void {
+    if (this.pendingAssignName !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.applyPendingNameTo(seriesId);
+      return;
+    }
+
     this.activeSeriesId = seriesId;
     this.visibleIds.add(seriesId);
     if (this.modeState === 'delete-point') {
@@ -789,6 +910,13 @@ export class CompactGraphEditor {
   }
 
   public handlePointPointerDown(event: PointerEvent, seriesId: string, index: number): void {
+    if (this.pendingAssignName !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.applyPendingNameTo(seriesId);
+      return;
+    }
+
     this.activeSeriesId = seriesId;
     this.visibleIds.add(seriesId);
     this.selection = { seriesId, index };
@@ -805,6 +933,13 @@ export class CompactGraphEditor {
   }
 
   public handlePathPointerDown(event: PointerEvent, seriesId: string): void {
+    if (this.pendingAssignName !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.applyPendingNameTo(seriesId);
+      return;
+    }
+
     this.activeSeriesId = seriesId;
     this.visibleIds.add(seriesId);
 
@@ -1017,6 +1152,7 @@ export class CompactGraphEditor {
       this.selection = null;
       this.deleteSelectionBox = null;
       this.deleteDragState = null;
+      this.pendingAssignName = null;
       this.visOpen = false;
       return;
     }
@@ -1062,10 +1198,13 @@ export class CompactGraphEditor {
       this.selection = null;
       this.hover = null;
       this.deleteSelectionBox = null;
+      this.pendingAssignName = null;
+      this.newNameInput = '';
       this.syncEditorSize(true);
     }
 
     this.syncAxisWarps();
+    this.syncAvailableNamesFromSeries(resetView);
 
     if (hasRenderablePoints && !this.hasVisibleDataInCurrentView()) {
       this.view = defaultViewFromPanels(nextPanels, this.calibration);
@@ -1155,6 +1294,7 @@ export class CompactGraphEditor {
   private commitLocalPanels(nextPanels: Panel[], requestPreview: boolean): void {
     const stripped = stripCurvePreview(nextPanels);
     this.panels = stripped;
+    this.syncAvailableNamesFromSeries(false);
     this.syncColors();
     this.syncVisibleSeries();
     this.emitResultJson(stripped);

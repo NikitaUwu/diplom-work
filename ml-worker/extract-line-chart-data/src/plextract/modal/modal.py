@@ -1,5 +1,5 @@
 import os
-from pathlib import Path, PurePosixPath
+import subprocess
 from modal import App, Volume, Image
 
 APP_NAME = "plextract" 
@@ -47,50 +47,26 @@ def download_volume_dir(
     - remote_dir: path inside the volume, e.g. "checkpoints/run-1" or "/"
     - local_dir: local destination directory
     """
-    destination_root = Path(local_dir)
-    destination_root.mkdir(parents=True, exist_ok=True)
-
-    normalized_remote_dir = remote_dir.rstrip("/")
-    if normalized_remote_dir == "":
-        normalized_remote_dir = "/"
-
-    remote_volume = vol if volume_name == VOLUME_NAME else Volume.from_name(volume_name, create_if_missing=False)
-
-    entries = remote_volume.listdir(normalized_remote_dir, recursive=True)
-    remote_root = PurePosixPath(normalized_remote_dir.lstrip("/")) if normalized_remote_dir != "/" else None
-
-    downloaded_file_count = 0
-    for entry in entries:
-        entry_type = getattr(entry, "type", None)
-        if getattr(entry_type, "name", str(entry_type)) != "FILE":
-            continue
-
-        remote_path = str(getattr(entry, "path", "")).strip()
-        if not remote_path:
-            continue
-
-        remote_posix_path = PurePosixPath(remote_path.lstrip("/"))
-        if remote_root is not None:
-            try:
-                relative_remote_path = remote_posix_path.relative_to(remote_root)
-            except ValueError:
-                continue
-        else:
-            relative_remote_path = remote_posix_path
-
-        if not relative_remote_path.parts:
-            continue
-
-        destination_path = destination_root.joinpath(*relative_remote_path.parts)
-        destination_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with destination_path.open("wb") as local_file:
-            for chunk in remote_volume.read_file(remote_path):
-                local_file.write(chunk)
-
-        downloaded_file_count += 1
-
-    if downloaded_file_count == 0:
+    # Ensure local directory exists
+    os.makedirs(local_dir, exist_ok=True)
+    
+    # Normalise remote_dir
+    remote_dir = remote_dir.rstrip("/")
+    if remote_dir == "":
+        remote_dir = "/"
+    
+    # Use Modal CLI to download the directory
+    # Format: modal volume get <volume-name> <remote-path> <local-path>
+    
+    result = subprocess.run(
+        ["modal", "volume", "get", volume_name, remote_dir, local_dir],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    
+    if result.returncode != 0:
         raise RuntimeError(
-            f"Failed to download volume directory: no files found under {normalized_remote_dir} in volume {volume_name}"
+            f"Failed to download volume directory: {result.stderr}\n"
+            f"Command: modal volume get {volume_name} {remote_dir} {local_dir}"
         )

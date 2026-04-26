@@ -76,6 +76,14 @@ type DeleteSelectionBox = {
   endY: number;
 };
 
+type AutoSplinePointDrag = {
+  panelIndex: number;
+  seriesId: string;
+  index: number;
+  before: Point;
+  pointerId: number;
+};
+
 type Patch =
   | { type: "move-point"; seriesId: string; index: number; before: Point; after: Point }
   | { type: "add-point"; seriesId: string; index: number; point: Point }
@@ -92,6 +100,8 @@ type Props = {
   backdropImageUrl?: string;
   showBackdrop?: boolean;
   resultJson: unknown;
+  highlightResultJson?: unknown;
+  showOnlyHighlightPoints?: boolean;
   onResultJsonChange?: (next: any) => void;
   uiMode?: "full" | "compact";
 };
@@ -375,6 +385,75 @@ function mergeCurvePreview(current: Panel[], preview: Panel[]): Panel[] {
   });
 }
 
+function sampleCubicSpline(points: Point[], samples = 300): Point[] {
+  const pts = points
+    .map((point) => ({ x: point.x, y: point.y }))
+    .sort((a, b) => a.x - b.x);
+
+  if (pts.length < 3) return pts;
+
+  const xs = pts.map((point) => point.x);
+  const ys = pts.map((point) => point.y);
+  for (let index = 1; index < xs.length; index += 1) {
+    if (Math.abs(xs[index] - xs[index - 1]) <= Number.EPSILON) return pts;
+  }
+
+  const n = xs.length;
+  const h = Array.from({ length: n - 1 }, (_, index) => xs[index + 1] - xs[index]);
+  const a = new Array<number>(n).fill(0);
+  const b = new Array<number>(n).fill(0);
+  const c = new Array<number>(n).fill(0);
+  const d = new Array<number>(n).fill(0);
+  b[0] = 1;
+  b[n - 1] = 1;
+
+  for (let index = 1; index < n - 1; index += 1) {
+    a[index] = h[index - 1];
+    b[index] = 2 * (h[index - 1] + h[index]);
+    c[index] = h[index];
+    d[index] = 3 * ((ys[index + 1] - ys[index]) / h[index] - (ys[index] - ys[index - 1]) / h[index - 1]);
+  }
+
+  for (let index = 1; index < n; index += 1) {
+    const weight = a[index] / b[index - 1];
+    b[index] -= weight * c[index - 1];
+    d[index] -= weight * d[index - 1];
+  }
+
+  const cc = new Array<number>(n).fill(0);
+  cc[n - 1] = d[n - 1] / b[n - 1];
+  for (let index = n - 2; index >= 0; index -= 1) {
+    cc[index] = (d[index] - c[index] * cc[index + 1]) / b[index];
+  }
+
+  const bb = new Array<number>(n - 1).fill(0);
+  const dd = new Array<number>(n - 1).fill(0);
+  for (let index = 0; index < n - 1; index += 1) {
+    bb[index] = (ys[index + 1] - ys[index]) / h[index] - (h[index] * (2 * cc[index] + cc[index + 1])) / 3;
+    dd[index] = (cc[index + 1] - cc[index]) / (3 * h[index]);
+  }
+
+  const result: Point[] = [];
+  const totalSamples = Math.max(samples, n);
+  for (let sample = 0; sample < totalSamples; sample += 1) {
+    const t = totalSamples === 1 ? 0 : sample / (totalSamples - 1);
+    const x = xs[0] + (xs[n - 1] - xs[0]) * t;
+    let segment = n - 2;
+    for (let index = 0; index < n - 1; index += 1) {
+      if (x <= xs[index + 1]) {
+        segment = index;
+        break;
+      }
+    }
+
+    const dx = x - xs[segment];
+    const y = ys[segment] + bb[segment] * dx + cc[segment] * dx * dx + dd[segment] * dx * dx * dx;
+    result.push({ x, y });
+  }
+
+  return result;
+}
+
 function buildNextResultJson(base: unknown, panels: Panel[]): any {
   const out: EditorResultJson = isObj(base) ? { ...(base as any) } : {};
   out.panels = panels.map((panel) => ({
@@ -385,6 +464,40 @@ function buildNextResultJson(base: unknown, panels: Panel[]): any {
       points: series.points.map((point) => [point.x, point.y]),
     })),
   }));
+  delete out.auto_spline;
+  return out;
+}
+
+function buildNextAutoSplineResultJson(base: unknown, highlightBase: unknown, panels: Panel[]): any {
+  const out: EditorResultJson = isObj(base) ? structuredClone(base as any) : {};
+  const currentAutoSpline = isObj(out.auto_spline) ? { ...(out.auto_spline as Record<string, any>) } : {};
+  const rawHighlight = isObj(highlightBase) ? highlightBase as Record<string, any> : {};
+  const sourcePanels = Array.isArray(currentAutoSpline.panels)
+    ? currentAutoSpline.panels
+    : Array.isArray(rawHighlight.panels)
+      ? rawHighlight.panels
+      : [];
+
+  currentAutoSpline.panels = panels.map((panel, panelIndex) => {
+    const rawPanel = isObj(sourcePanels[panelIndex]) ? { ...sourcePanels[panelIndex] } : {};
+    const rawSeries = Array.isArray(rawPanel.series) ? rawPanel.series : [];
+
+    rawPanel.id = panel.id ?? rawPanel.id;
+    rawPanel.series = panel.series.map((series, seriesIndex) => {
+      const rawSeriesItem = isObj(rawSeries[seriesIndex]) ? { ...rawSeries[seriesIndex] } : {};
+      return {
+        ...rawSeriesItem,
+        id: series.id,
+        name: series.name,
+        points: series.points.map((point) => [point.x, point.y]),
+        curve_points: series.curvePoints.map((point) => [point.x, point.y]),
+      };
+    });
+
+    return rawPanel;
+  });
+
+  out.auto_spline = currentAutoSpline;
   return out;
 }
 
@@ -529,12 +642,15 @@ export default function GraphEditor({
   backdropImageUrl,
   showBackdrop = false,
   resultJson,
+  highlightResultJson,
+  showOnlyHighlightPoints = false,
   onResultJsonChange,
   uiMode = "full",
 }: Props) {
   const calibration = useMemo(() => parseEditorOverlayCalibration(resultJson), [resultJson]);
   const overlayLocked = calibration !== null;
   const initialPanels = useMemo(() => parsePanels(resultJson), [resultJson]);
+  const highlightPanels = useMemo(() => parsePanels(highlightResultJson), [highlightResultJson]);
   const compactMode = uiMode === "compact";
 
   const [panels, setPanels] = useState<Panel[]>(() => initialPanels);
@@ -572,6 +688,9 @@ export default function GraphEditor({
   const [colorById, setColorById] = useState<Record<string, number>>({});
 
   const nameBeforeRef = useRef<string | null>(null);
+  const [customNames, setCustomNames] = useState<string[]>([]);
+  const [pendingAssignName, setPendingAssignName] = useState<string | null>(null);
+  const [newNameInput, setNewNameInput] = useState("");
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null);
@@ -585,6 +704,7 @@ export default function GraphEditor({
 
   const tickDragRef = useRef<null | { axis: "x" | "y"; index: number; before: AxisWarp; pointerId: number }>(null);
   const pointDragRef = useRef<null | { seriesId: string; index: number; before: Point; pointerId: number }>(null);
+  const autoSplinePointDragRef = useRef<AutoSplinePointDrag | null>(null);
 
   const panRef = useRef<
     null | {
@@ -662,6 +782,12 @@ export default function GraphEditor({
   }, [chartId, backdropImageUrl]);
 
   useEffect(() => {
+    setCustomNames([]);
+    setPendingAssignName(null);
+    setNewNameInput("");
+  }, [chartId]);
+
+  useEffect(() => {
     if (showBackdrop) return;
     setBackdropMoveMode(false);
   }, [showBackdrop]);
@@ -670,6 +796,15 @@ export default function GraphEditor({
 
   const panel0 = panels[0] ?? { series: [] };
   const seriesList = panel0.series;
+  const [editableHighlightPanels, setEditableHighlightPanels] = useState<Panel[]>(() => highlightPanels);
+  const highlightSeriesList = useMemo(() => {
+    const panel = editableHighlightPanels[0] ?? { series: [] };
+    return panel.series;
+  }, [editableHighlightPanels]);
+
+  useEffect(() => {
+    setEditableHighlightPanels(highlightPanels);
+  }, [highlightPanels]);
 
   useEffect(() => {
     if (activeSeriesId && seriesList.some((s) => s.id === activeSeriesId)) return;
@@ -681,6 +816,33 @@ export default function GraphEditor({
     [seriesList, activeSeriesId]
   );
   const canMoveBackdrop = showBackdrop && Boolean(backdropImageUrl) && !overlayLocked;
+  const detectedNames = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+
+    for (const series of seriesList) {
+      const name = series.name.trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+
+    return out;
+  }, [seriesList]);
+  const availableNames = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+
+    for (const rawName of [...detectedNames, ...customNames]) {
+      const name = rawName.trim().slice(0, MAX_SERIES_NAME);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+
+    return out;
+  }, [customNames, detectedNames]);
+  const customNameSet = useMemo(() => new Set(customNames), [customNames]);
 
   useEffect(() => {
     if (!overlayLocked || !calibration) return;
@@ -1136,6 +1298,89 @@ export default function GraphEditor({
     });
   };
 
+  const setEditableHighlightPanelsAndEmit = (updater: (prev: Panel[]) => Panel[]) => {
+    setEditableHighlightPanels((prev) => {
+      const updated = updater(prev);
+      if (updated === prev) return prev;
+
+      const nextResultJson = buildNextAutoSplineResultJson(resultJson, highlightResultJson, updated);
+      commitResultJson(nextResultJson);
+      return updated;
+    });
+  };
+
+  const selectNameToAssign = (name: string) => {
+    const nextName = name.trim().slice(0, MAX_SERIES_NAME);
+    if (!nextName) return;
+
+    setErr(null);
+    setPendingAssignName(nextName);
+    setMode("select");
+    setPanMode(false);
+    setGridDragAxis(null);
+    setHover(null);
+    setSelection(null);
+    setBackdropMoveMode(false);
+    deleteSelectionDragRef.current = null;
+    setDeleteSelectionBox(null);
+  };
+
+  const cancelAssignMode = () => {
+    setPendingAssignName(null);
+  };
+
+  const addCustomName = () => {
+    const nextName = newNameInput.trim().slice(0, MAX_SERIES_NAME);
+    setNewNameInput("");
+    if (!nextName) return;
+
+    setCustomNames((prev) => (prev.includes(nextName) ? prev : [...prev, nextName]));
+  };
+
+  const removeCustomName = (name: string) => {
+    setCustomNames((prev) => prev.filter((item) => item !== name));
+    if (pendingAssignName === name) {
+      setPendingAssignName(null);
+    }
+  };
+
+  const applyPendingNameToSeries = (seriesId: string) => {
+    const nextName = pendingAssignName?.trim().slice(0, MAX_SERIES_NAME) ?? "";
+    if (!nextName) return false;
+
+    const target = seriesList.find((series) => series.id === seriesId);
+    if (!target) return false;
+
+    setErr(null);
+    setPendingAssignName(null);
+    setActiveSeriesId(seriesId);
+    setVisibleIds((prev) => {
+      if (prev.has(seriesId)) return prev;
+      const next = new Set(prev);
+      next.add(seriesId);
+      return next;
+    });
+
+    if (target.name === nextName) {
+      return true;
+    }
+
+    setPanelsAndEmit((prev) => {
+      const next = structuredClone(prev) as Panel[];
+      const p0 = next[0] ?? { series: [] };
+      next[0] = p0;
+      const series = p0.series.find((item) => item.id === seriesId);
+      if (!series) return prev;
+      const before = series.name;
+      if (before === nextName) return prev;
+      series.name = nextName;
+      pushUndo({ type: "rename-series", seriesId, before, after: nextName });
+      return next;
+    });
+
+    return true;
+  };
+
   const onAuto = () => {
     if (calibration) {
       const before = view;
@@ -1376,6 +1621,7 @@ export default function GraphEditor({
         setGridDragAxis(null);
         setPanMode(false);
         setBackdropMoveMode(false);
+        setPendingAssignName(null);
         deleteSelectionDragRef.current = null;
         setDeleteSelectionBox(null);
         setHover(null);
@@ -1581,6 +1827,8 @@ export default function GraphEditor({
       return;
     }
 
+    if (pendingAssignName) return;
+
     if (gridDragAxis) return;
 
     if (panMode) {
@@ -1651,7 +1899,7 @@ export default function GraphEditor({
 
   const onSvgDoubleClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
-    if (mode === "delete-point" || gridDragAxis || panMode || backdropMoveMode) return;
+    if (mode === "delete-point" || gridDragAxis || panMode || backdropMoveMode || pendingAssignName) return;
     if (e.target instanceof SVGCircleElement) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
@@ -1673,6 +1921,12 @@ export default function GraphEditor({
   const onHandlePointerDown = (e: React.PointerEvent, seriesId: string, index: number) => {
     if (backdropMoveMode && canMoveBackdrop) {
       startBackdropDrag(e);
+      return;
+    }
+
+    if (applyPendingNameToSeries(seriesId)) {
+      e.preventDefault();
+      e.stopPropagation();
       return;
     }
 
@@ -1706,6 +1960,32 @@ export default function GraphEditor({
 
     pointDragRef.current = { seriesId, index, before: { ...pt }, pointerId: e.pointerId };
     svgRef.current?.setPointerCapture?.(e.pointerId);
+  };
+
+  const onAutoSplinePointPointerDown = (
+    e: React.PointerEvent,
+    panelIndex: number,
+    seriesId: string,
+    index: number
+  ) => {
+    if (!showOnlyHighlightPoints || pendingAssignName || gridDragAxis || panMode || mode === "delete-point") return;
+
+    const panel = editableHighlightPanels[panelIndex];
+    const series = panel?.series.find((item) => item.id === seriesId);
+    const point = series?.points[index];
+    if (!point) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    setErr(null);
+    autoSplinePointDragRef.current = { panelIndex, seriesId, index, before: { ...point }, pointerId: e.pointerId };
+    svgRef.current?.setPointerCapture?.(e.pointerId);
+  };
+
+  const onPathPointerDown = (e: React.PointerEvent<SVGPathElement>, seriesId: string) => {
+    if (!applyPendingNameToSeries(seriesId)) return;
+    e.preventDefault();
+    e.stopPropagation();
   };
 
   const onSvgPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
@@ -1774,6 +2054,32 @@ export default function GraphEditor({
         domainY: [p.startView.domainY[0] + dy, p.startView.domainY[1] + dy],
       });
 
+      return;
+    }
+
+    if (autoSplinePointDragRef.current) {
+      const d = autoSplinePointDragRef.current;
+      if (e.pointerId !== d.pointerId) return;
+
+      const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const x = scale.invX(clamp(px, layout.l, layout.l + layout.pw));
+      const y = scale.invY(clamp(py, layout.t, layout.t + layout.ph));
+
+      setEditableHighlightPanelsAndEmit((prev) => {
+        const next = structuredClone(prev) as Panel[];
+        const panel = next[d.panelIndex];
+        const series = panel?.series.find((item) => item.id === d.seriesId);
+        if (!series || !series.points[d.index]) return prev;
+
+        series.points[d.index] = { x, y };
+        series.curvePoints = sampleCubicSpline(series.points);
+        return next;
+      });
+
+      const seriesName = editableHighlightPanels[d.panelIndex]?.series.find((item) => item.id === d.seriesId)?.name ?? "Сплайн";
+      setHover({ cx: scale.mapX(x), cy: scale.mapY(y), x, y, seriesName });
       return;
     }
 
@@ -1877,6 +2183,18 @@ export default function GraphEditor({
     }
 
     // finish point drag
+    if (autoSplinePointDragRef.current) {
+      const d = autoSplinePointDragRef.current;
+      if (e.pointerId !== d.pointerId) return;
+
+      autoSplinePointDragRef.current = null;
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+      setHover(null);
+      return;
+    }
+
     if (pointDragRef.current) {
       const d = pointDragRef.current;
       if (e.pointerId !== d.pointerId) return;
@@ -1921,8 +2239,46 @@ export default function GraphEditor({
       .filter(Boolean) as { id: string; d: string }[];
   }, [seriesList, scale, visibleIds]);
 
+  const highlightPaths = useMemo(() => {
+    const mkPath = (pts: Point[]) => {
+      if (!pts.length) return "";
+      return `M ${pts.map((p) => `${scale.mapX(p.x)} ${scale.mapY(p.y)}`).join(" L ")}`;
+    };
+
+    return highlightSeriesList
+      .map((series) => {
+        const drawPts = series.curvePoints.length ? series.curvePoints : sampleCubicSpline(series.points);
+        const d = mkPath(drawPts);
+        return d ? { id: series.id, d } : null;
+      })
+      .filter(Boolean) as { id: string; d: string }[];
+  }, [highlightSeriesList, scale]);
+
+  const highlightPoints = useMemo(() => {
+    return editableHighlightPanels.flatMap((panel, panelIndex) => panel.series.flatMap((series) => {
+      const rawId = series.id.replace(/_spline$/i, "");
+      const rawName = series.name.replace(/_spline$/i, "");
+      const baseSeries = seriesList.find((item) => item.id === series.id || item.name === series.name || item.id === rawId || item.name === rawName);
+      const seriesName = series.name || baseSeries?.name || rawName || series.id;
+
+      return series.points.map((point, index) => ({
+        key: `${series.id}_${index}_${point.x}_${point.y}`,
+        panelIndex,
+        seriesId: series.id,
+        index,
+        cx: scale.mapX(point.x),
+        cy: scale.mapY(point.y),
+        x: point.x,
+        y: point.y,
+        seriesName,
+      }));
+    }));
+  }, [editableHighlightPanels, scale, seriesList]);
+
   const hint = compactMode
     ? ""
+    : pendingAssignName
+      ? `Режим: выбрано имя \"${pendingAssignName}\". Кликни по линии или точке, чтобы назначить его.`
     : mode === "delete-point"
       ? "Режим: двойной клик по точке или выделение рамкой для удаления"
       : "Двойной клик: добавить точку";
@@ -2005,6 +2361,7 @@ export default function GraphEditor({
             setHover(null);
             setSelection(null);
             setBackdropMoveMode(false);
+            setPendingAssignName(null);
             deleteSelectionDragRef.current = null;
             setDeleteSelectionBox(null);
             setMode((m) => (m === "delete-point" ? "select" : "delete-point"));
@@ -2216,12 +2573,102 @@ export default function GraphEditor({
         </div>
       </div>
 
-      <div className="w-full overflow-auto">
-        <div
-          className="relative mx-auto overflow-auto rounded-2xl bg-white ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800"
-          style={{ width: windowBox.w, height: windowBox.h }}
-        >
-          <div className="relative" style={{ width: contentBox.w, height: contentBox.h }}>
+      <div className={compactMode ? "w-full overflow-auto" : "flex flex-col gap-4 md:flex-row md:items-start"}>
+        {!compactMode && (
+          <aside className="w-full shrink-0 rounded-2xl bg-white p-4 ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800 md:w-72">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Имена кривых</div>
+                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Выбери имя, затем кликни по линии или точке
+                </div>
+              </div>
+              {pendingAssignName && (
+                <button
+                  type="button"
+                  onClick={cancelAssignMode}
+                  className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                >
+                  Отмена
+                </button>
+              )}
+            </div>
+
+            {pendingAssignName && (
+              <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 dark:border-sky-900/40 dark:bg-sky-950/30 dark:text-sky-300">
+                Активно имя: <span className="font-semibold">{pendingAssignName}</span>
+              </div>
+            )}
+
+            <div className="mt-4 space-y-2">
+              {availableNames.map((name) => (
+                <div key={name} className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => selectNameToAssign(name)}
+                    className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-left text-sm transition ${
+                      pendingAssignName === name
+                        ? "border-sky-500 bg-sky-50 font-medium text-sky-700 dark:border-sky-500 dark:bg-sky-950/30 dark:text-sky-300"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800"
+                    }`}
+                  >
+                    <span className="block truncate">{name}</span>
+                  </button>
+
+                  {customNameSet.has(name) && (
+                    <button
+                      type="button"
+                      onClick={() => removeCustomName(name)}
+                      title={`Убрать имя \"${name}\" из списка`}
+                      className="flex h-9 w-9 items-center justify-center rounded-xl text-sm font-semibold text-rose-500 transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+
+              {availableNames.length === 0 && (
+                <div className="rounded-xl border border-dashed border-slate-200 px-3 py-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  Имена пока не найдены. Добавь своё ниже.
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 space-y-2 border-t border-slate-200 pt-4 dark:border-slate-800">
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                Добавить имя
+              </div>
+              <input
+                className="h-10 w-full rounded-xl bg-white px-3 text-sm ring-1 ring-slate-200 outline-none transition focus:ring-2 focus:ring-slate-400 dark:bg-slate-950 dark:ring-slate-800"
+                placeholder="Новое имя"
+                value={newNameInput}
+                maxLength={MAX_SERIES_NAME}
+                onChange={(e) => setNewNameInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addCustomName();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={addCustomName}
+                className="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900"
+              >
+                Добавить в список
+              </button>
+            </div>
+          </aside>
+        )}
+
+        <div className="w-full overflow-auto">
+          <div
+            className="relative mx-auto overflow-auto rounded-2xl bg-white ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800"
+            style={{ width: windowBox.w, height: windowBox.h }}
+          >
+            <div className="relative" style={{ width: contentBox.w, height: contentBox.h }}>
             {hover && (
               <div
                 className="pointer-events-none absolute z-20 rounded-xl bg-slate-900 px-3 py-2 text-xs text-white shadow-sm"
@@ -2239,7 +2686,7 @@ export default function GraphEditor({
               className="block touch-none"
               width={contentBox.w}
               height={contentBox.h}
-              style={{ cursor: backdropMoveMode ? (backdropDragRef.current ? "grabbing" : "grab") : panMode ? "grab" : mode === "delete-point" ? "crosshair" : "default" }}
+              style={{ cursor: backdropMoveMode ? (backdropDragRef.current ? "grabbing" : "grab") : panMode ? "grab" : pendingAssignName ? "crosshair" : mode === "delete-point" ? "crosshair" : "default" }}
               onPointerDown={onSvgPointerDown}
               onDoubleClick={onSvgDoubleClick}
               onPointerMove={onSvgPointerMove}
@@ -2355,19 +2802,45 @@ export default function GraphEditor({
               const col = COLOR_OPTIONS[cIdx];
               const active = p.id === activeSeriesId;
               return (
-                <path
-                  key={p.id}
-                  d={p.d}
-                  fill="none"
-                  strokeWidth={active ? 3.25 : 2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className={`${col.path} ${active ? "opacity-100" : "opacity-28"}`}
-                />
+                <g key={p.id}>
+                  <path
+                    d={p.d}
+                    fill="none"
+                    stroke="transparent"
+                    strokeWidth={12}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    pointerEvents="stroke"
+                    style={{ cursor: pendingAssignName ? "pointer" : undefined }}
+                    onPointerDown={(e) => onPathPointerDown(e, p.id)}
+                  />
+                  <path
+                    d={p.d}
+                    fill="none"
+                    strokeWidth={active ? 3.25 : 2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={`${col.path} ${active ? "opacity-100" : "opacity-28"}`}
+                  />
+                </g>
               );
             })}
 
-            {seriesList.map((s) => {
+            {highlightPaths.map((path) => (
+              <path
+                key={`highlight_path_${path.id}`}
+                d={path.d}
+                fill="none"
+                className="stroke-amber-500 dark:stroke-amber-300"
+                strokeWidth={1.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeDasharray="5 4"
+                pointerEvents="none"
+              />
+            ))}
+
+            {!showOnlyHighlightPoints && seriesList.map((s) => {
               if (!visibleIds.has(s.id)) return null;
               const cIdx = colorById[s.id] ?? 0;
               const col = COLOR_OPTIONS[cIdx];
@@ -2389,7 +2862,7 @@ export default function GraphEditor({
                     r={r}
                     className={`${col.pointFill} ${active ? "opacity-100" : "opacity-45"}`}
                     strokeWidth={0}
-                    style={{ cursor: mode === "delete-point" ? "pointer" : undefined }}
+                    style={{ cursor: pendingAssignName || mode === "delete-point" ? "pointer" : undefined }}
                     onPointerDown={(e) => onHandlePointerDown(e, s.id, i)}
                     onDoubleClick={(e) => onPointDoubleClick(e, s.id, i)}
                     onPointerEnter={() =>
@@ -2400,6 +2873,42 @@ export default function GraphEditor({
                 );
               });
             })}
+
+            {highlightPoints.map((point) => (
+              <g
+                key={point.key}
+                style={{ cursor: showOnlyHighlightPoints ? "grab" : "default" }}
+                onPointerDown={(event) => onAutoSplinePointPointerDown(event, point.panelIndex, point.seriesId, point.index)}
+                onPointerEnter={() =>
+                  setHover({ cx: point.cx, cy: point.cy, x: point.x, y: point.y, seriesName: point.seriesName })
+                }
+                onPointerLeave={() => setHover(null)}
+              >
+                <circle
+                  cx={point.cx}
+                  cy={point.cy}
+                  r={pointRadius + 5}
+                  className="fill-amber-400/25 dark:fill-amber-300/25"
+                  stroke="none"
+                />
+                <circle
+                  cx={point.cx}
+                  cy={point.cy}
+                  r={pointRadius + 2.5}
+                  className="fill-none stroke-amber-500 dark:stroke-amber-300"
+                  strokeWidth={2.5}
+                  strokeDasharray="3 2"
+                />
+                <circle
+                  cx={point.cx}
+                  cy={point.cy}
+                  r={pointRadius + 0.5}
+                  className="fill-orange-500 dark:fill-orange-300"
+                  stroke="#111827"
+                  strokeWidth={2}
+                />
+              </g>
+            ))}
           </g>
 
           {deleteSelectionBox && (() => {
@@ -2511,6 +3020,7 @@ export default function GraphEditor({
         >
           <span className="pointer-events-none text-[10px] leading-none">⋰</span>
         </div>
+      </div>
       </div>
       </div>
     </div>

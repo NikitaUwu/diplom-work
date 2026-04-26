@@ -244,14 +244,31 @@ export async function saveChartResult(
 export async function previewChartSplinePoints(
   chartId: number,
   totalPoints: number,
+  resultJson?: unknown,
 ): Promise<ChartCreateResponse> {
   return apiFetchJson<ChartCreateResponse>(
     `/charts/${chartId}/cubic-preview`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ totalPoints }),
+      body: JSON.stringify({ totalPoints, resultJson }),
     },
     'Предпросмотр кубического сплайна по точкам',
+  );
+}
+
+export async function previewChartRandomSplinePoints(
+  chartId: number,
+  totalPoints: number,
+  resultJson?: unknown,
+): Promise<ChartCreateResponse> {
+  return apiFetchJson<ChartCreateResponse>(
+    `/charts/${chartId}/cubic-preview-random`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ totalPoints, resultJson }),
+    },
+    'Предпросмотр случайного кубического сплайна по точкам',
   );
 }

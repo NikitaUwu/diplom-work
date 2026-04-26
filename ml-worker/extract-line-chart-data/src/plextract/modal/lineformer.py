@@ -1,7 +1,7 @@
 import os
 import modal
 from typing import List, Dict, Tuple, Any
-from modal import method
+from modal import App, gpu, method
 from .modal import vol, base_cv_image, modal_app as app
 
 
@@ -21,7 +21,7 @@ class LineFormer:
         from huggingface_hub import snapshot_download
         from lineformer import infer
 
-        os.makedirs("huggingface", exist_ok=True)
+        os.makedirs("huggingface")
 
         snapshot_download("tdsone/lineformer", local_dir="huggingface")
 

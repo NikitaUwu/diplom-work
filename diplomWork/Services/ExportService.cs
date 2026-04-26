@@ -2,6 +2,7 @@ using DiplomWork.Domain;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace DiplomWork.Services;
 
@@ -47,6 +48,22 @@ public sealed class ExportService
 
     public string ExportToJson(List<PanelData> panels, string? panelId = null, string? seriesId = null, bool pretty = false)
     {
+        return ExportToJson(new JsonObject(), panels, panelId, seriesId, pretty);
+    }
+
+    public string ExportToJson(JsonObject baseResultJson, List<PanelData> panels, string? panelId = null, string? seriesId = null, bool pretty = false)
+    {
+        var payload = JsonNode.Parse(baseResultJson.ToJsonString())?.AsObject() ?? new JsonObject();
+        payload["panels"] = BuildPanelsJson(panels, panelId, seriesId);
+
+        return payload.ToJsonString(new JsonSerializerOptions
+        {
+            WriteIndented = pretty,
+        });
+    }
+
+    private static JsonArray BuildPanelsJson(List<PanelData> panels, string? panelId = null, string? seriesId = null)
+    {
         var outPanels = new List<object>();
         foreach (var panel in panels)
         {
@@ -81,12 +98,7 @@ public sealed class ExportService
             }
         }
 
-        return JsonSerializer.Serialize(
-            new { panels = outPanels },
-            new JsonSerializerOptions
-            {
-                WriteIndented = pretty,
-            });
+        return JsonNode.Parse(JsonSerializer.Serialize(outPanels))?.AsArray() ?? new JsonArray();
     }
 
     public string ExportToTableCsv(List<PanelData> panels, string? panelId = null, List<string>? seriesIds = null)

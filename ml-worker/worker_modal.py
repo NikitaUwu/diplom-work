@@ -4,98 +4,37 @@ import json
 import os
 import re
 import shutil
-import socket
-import sys
-import threading
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from queue import Queue
 from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
 from dotenv import load_dotenv
 from psycopg2.extras import Json, RealDictCursor
 
-try:
-    import paho.mqtt.client as mqtt
-except ImportError:
-    mqtt = None
+from plextract import extract
 
 # Чтобы меньше ловить Windows-ошибок кодировок при вызовах CLI
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-
-def _configure_stdio_for_windows() -> None:
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name, None)
-        if stream is None or not hasattr(stream, "reconfigure"):
-            continue
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-
-
-_configure_stdio_for_windows()
-
-from plextract import extract
-
 VALUE_EPS = 1e-9
 SCREEN_EPS = 1e-4
-_HAS_PROCESSING_JOBS_TABLE: Optional[bool] = None
-
-ERROR_INPUT_FILE_MISSING = "input_file_missing"
-ERROR_STORAGE_PERMISSION_DENIED = "storage_permission_denied"
-ERROR_PIPELINE_OUTPUT_INVALID = "pipeline_output_invalid"
-ERROR_MODAL_BACKEND_UNAVAILABLE = "modal_backend_unavailable"
-ERROR_NETWORK_TIMEOUT = "network_timeout"
-ERROR_UNEXPECTED_WORKER_ERROR = "unexpected_worker_error"
-
-
-def _env_bool(name: str, default: str = "0") -> bool:
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _worker_id() -> str:
-    return os.getenv("WORKER_ID", f"{socket.gethostname()}:{os.getpid()}")
 
 
 @dataclass
 class Job:
     chart_id: int
     original_path: str
-    processing_job_id: Optional[int] = None
-    message_id: Optional[str] = None
-
-
-@dataclass
-class MqttTransport:
-    client: Any
-    request_topic: str
-    accepted_topic: str
-    heartbeat_topic: str
-    completed_topic: str
-    failed_topic: str
-    heartbeat_interval_seconds: float
 
 
 class PipelineError(Exception):
-    def __init__(
-        self,
-        message: str,
-        artifacts: dict[str, str] | None = None,
-        *,
-        error_code: str | None = None,
-        retryable: bool | None = None,
-    ):
+    def __init__(self, message: str, artifacts: dict[str, str] | None = None):
         super().__init__(message)
         self.artifacts = artifacts or {}
-        self.error_code = error_code
-        self.retryable = retryable
 
 
 def _normalize_db_url(url: str) -> str:
@@ -111,97 +50,6 @@ def _connect():
     conn = psycopg2.connect(db_url)
     conn.autocommit = False
     return conn
-
-
-def _has_processing_jobs_table(conn) -> bool:
-    global _HAS_PROCESSING_JOBS_TABLE
-    if _HAS_PROCESSING_JOBS_TABLE is not None:
-        return _HAS_PROCESSING_JOBS_TABLE
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT to_regclass('public.processing_jobs')")
-            row = cur.fetchone()
-            _HAS_PROCESSING_JOBS_TABLE = bool(row and row[0])
-    except Exception:
-        _HAS_PROCESSING_JOBS_TABLE = False
-
-    return _HAS_PROCESSING_JOBS_TABLE
-
-
-def _latest_processing_job_id(cur, chart_id: int) -> Optional[int]:
-    cur.execute(
-        """
-        SELECT id
-        FROM processing_jobs
-        WHERE chart_id = %s
-        ORDER BY created_at DESC, id DESC
-        LIMIT 1
-        """,
-        (chart_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        return None
-    if isinstance(row, dict):
-        raw_id = row.get("id")
-    else:
-        raw_id = row[0]
-    return int(raw_id) if raw_id is not None else None
-
-
-def _mark_processing_job_started(cur, job_id: Optional[int], message_id: Optional[str]) -> None:
-    if not job_id:
-        return
-
-    cur.execute(
-        """
-        UPDATE processing_jobs
-        SET status = %s,
-            error_message = NULL,
-            worker_id = %s,
-            started_at = COALESCE(started_at, NOW()),
-            message_id = COALESCE(message_id, %s)
-        WHERE id = %s
-        """,
-        ("processing", _worker_id(), message_id, job_id),
-    )
-
-
-def _mark_processing_job_done(cur, job_id: Optional[int], result_json: Dict[str, Any]) -> None:
-    if not job_id:
-        return
-
-    cur.execute(
-        """
-        UPDATE processing_jobs
-        SET status = %s,
-            result_payload = %s,
-            error_message = NULL,
-            finished_at = NOW(),
-            worker_id = COALESCE(worker_id, %s)
-        WHERE id = %s
-        """,
-        ("done", Json(result_json), _worker_id(), job_id),
-    )
-
-
-def _mark_processing_job_error(cur, job_id: Optional[int], message: str, result_json: Optional[Dict[str, Any]] = None) -> None:
-    if not job_id:
-        return
-
-    cur.execute(
-        """
-        UPDATE processing_jobs
-        SET status = %s,
-            error_message = %s,
-            result_payload = %s,
-            finished_at = NOW(),
-            worker_id = COALESCE(worker_id, %s)
-        WHERE id = %s
-        """,
-        ("error", message[:2000], Json(result_json) if result_json is not None else None, _worker_id(), job_id),
-    )
 
 
 def _fetch_one_and_mark_processing(conn) -> Optional[Job]:
@@ -237,73 +85,13 @@ def _fetch_one_and_mark_processing(conn) -> Optional[Job]:
                 ("processing", chart_id),
             )
 
-            processing_job_id: Optional[int] = None
-            if _has_processing_jobs_table(conn):
-                processing_job_id = _latest_processing_job_id(cur, chart_id)
-                _mark_processing_job_started(cur, processing_job_id, None)
-
             return Job(
                 chart_id=chart_id,
                 original_path=str(row["original_path"]),
-                processing_job_id=processing_job_id,
             )
 
 
-def _claim_chart_from_mqtt(conn, payload: Dict[str, Any]) -> Optional[Job]:
-    try:
-        chart_id = int(payload.get("chartId"))
-    except (TypeError, ValueError):
-        return None
-
-    raw_job_id = payload.get("jobId")
-    raw_message_id = payload.get("messageId")
-    processing_job_id = None
-    if raw_job_id is not None:
-        try:
-            processing_job_id = int(raw_job_id)
-        except (TypeError, ValueError):
-            processing_job_id = None
-
-    message_id = str(raw_message_id).strip() if raw_message_id is not None else None
-
-    with conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                UPDATE charts
-                SET status = %s,
-                    error_message = NULL
-                WHERE id = %s
-                  AND status = %s
-                RETURNING id, original_path
-                """,
-                ("processing", chart_id, "uploaded"),
-            )
-            row = cur.fetchone()
-            if not row:
-                return None
-
-            if _has_processing_jobs_table(conn):
-                if processing_job_id is None:
-                    processing_job_id = _latest_processing_job_id(cur, chart_id)
-                _mark_processing_job_started(cur, processing_job_id, message_id)
-
-            return Job(
-                chart_id=int(row["id"]),
-                original_path=str(row["original_path"]),
-                processing_job_id=processing_job_id,
-                message_id=message_id,
-            )
-
-
-def _mark_done(
-    conn,
-    chart_id: int,
-    result_json: Dict[str, Any],
-    n_panels: int,
-    n_series: int,
-    processing_job_id: Optional[int] = None,
-) -> None:
+def _mark_done(conn, chart_id: int, result_json: Dict[str, Any], n_panels: int, n_series: int) -> None:
     with conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -319,17 +107,9 @@ def _mark_done(
                 """,
                 ("done", Json(result_json), n_panels, n_series, chart_id),
             )
-            if _has_processing_jobs_table(conn):
-                _mark_processing_job_done(cur, processing_job_id, result_json)
 
 
-def _mark_error(
-    conn,
-    chart_id: int,
-    message: str,
-    result_json: Optional[Dict[str, Any]] = None,
-    processing_job_id: Optional[int] = None,
-) -> None:
+def _mark_error(conn, chart_id: int, message: str, result_json: Optional[Dict[str, Any]] = None) -> None:
     with conn:
         with conn.cursor() as cur:
             if result_json is None:
@@ -355,9 +135,6 @@ def _mark_error(
                     """,
                     ("error", message[:2000], Json(result_json), chart_id),
                 )
-
-            if _has_processing_jobs_table(conn):
-                _mark_processing_job_error(cur, processing_job_id, message, result_json)
 
 
 def _get_storage_dir_from_original(original_path: Path) -> Path:
@@ -1019,12 +796,7 @@ def _run_plextract(chart_id: int, original_path: Path, work_dir: Path) -> Tuple[
                 payload = json.load(f)
             series_points = _parse_points(payload)
         except Exception as e:
-            raise PipelineError(
-                str(e),
-                artifacts,
-                error_code=ERROR_PIPELINE_OUTPUT_INVALID,
-                retryable=False,
-            )
+            raise PipelineError(str(e), artifacts)
 
     result_json = _to_backend_result(series_points)
     result_json["artifacts"] = artifacts
@@ -1042,337 +814,6 @@ def _run_plextract(chart_id: int, original_path: Path, work_dir: Path) -> Tuple[
     return result_json, n_panels, n_series
 
 
-def _mqtt_subscription_topic(topic: str) -> str:
-    shared_group = os.getenv("MQTT_SHARED_GROUP", "").strip()
-    if not shared_group:
-        return topic
-    return f"$share/{shared_group}/{topic}"
-
-
-def _start_mqtt_transport(job_queue: Queue) -> MqttTransport:
-    if mqtt is None:
-        raise RuntimeError("MQTT is enabled, but paho-mqtt is not installed.")
-
-    request_topic = os.getenv("MQTT_PROCESS_REQUEST_TOPIC", "charts/process/request")
-    accepted_topic = os.getenv("MQTT_PROCESS_ACCEPTED_TOPIC", "charts/process/accepted")
-    heartbeat_topic = os.getenv("MQTT_PROCESS_HEARTBEAT_TOPIC", "charts/process/heartbeat")
-    completed_topic = os.getenv("MQTT_PROCESS_COMPLETED_TOPIC", "charts/process/completed")
-    failed_topic = os.getenv("MQTT_PROCESS_FAILED_TOPIC", "charts/process/failed")
-    heartbeat_interval_seconds = float(os.getenv("PROCESSING_HEARTBEAT_INTERVAL_SECONDS", "10"))
-    host = os.getenv("MQTT_HOST", "localhost")
-    port = int(os.getenv("MQTT_PORT", "1883"))
-    username = os.getenv("MQTT_USERNAME")
-    password = os.getenv("MQTT_PASSWORD")
-    client_id_prefix = os.getenv("MQTT_CLIENT_ID_PREFIX", "diplom-worker")
-    client_id = f"{client_id_prefix}-{uuid.uuid4().hex[:12]}"
-    subscription_topic = _mqtt_subscription_topic(request_topic)
-
-    client = mqtt.Client(client_id=client_id, clean_session=True)
-    if username:
-        client.username_pw_set(username, password or None)
-
-    def on_connect(client, userdata, flags, rc):
-        if rc == 0:
-            client.subscribe(subscription_topic, qos=1)
-            print(f"[WORKER] MQTT connected; subscribed to {subscription_topic}")
-        else:
-            print(f"[WORKER] MQTT connect failed with rc={rc}")
-
-    def on_disconnect(client, userdata, rc):
-        if rc != 0:
-            print(f"[WORKER] MQTT disconnected unexpectedly with rc={rc}")
-
-    def on_message(client, userdata, message):
-        try:
-            payload = json.loads(message.payload.decode("utf-8"))
-        except Exception as exc:
-            print(f"[WORKER] MQTT message decode error: {exc}")
-            return
-
-        if isinstance(payload, dict):
-            job_queue.put(payload)
-
-    client.on_connect = on_connect
-    client.on_disconnect = on_disconnect
-    client.on_message = on_message
-    client.connect(host, port, keepalive=60)
-    client.loop_start()
-    print(f"[WORKER] MQTT transport started for {host}:{port}")
-    return MqttTransport(
-        client=client,
-        request_topic=request_topic,
-        accepted_topic=accepted_topic,
-        heartbeat_topic=heartbeat_topic,
-        completed_topic=completed_topic,
-        failed_topic=failed_topic,
-        heartbeat_interval_seconds=max(1.0, heartbeat_interval_seconds),
-    )
-
-
-def _publish_mqtt_event(transport: MqttTransport, topic: str, payload: Dict[str, Any]) -> None:
-    serialized = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    info = transport.client.publish(topic, serialized, qos=1)
-    if hasattr(info, "wait_for_publish"):
-        info.wait_for_publish()
-
-    rc = getattr(info, "rc", 0)
-    if mqtt is not None and rc != mqtt.MQTT_ERR_SUCCESS:
-        raise RuntimeError(f"MQTT publish failed with rc={rc} for topic {topic}")
-
-
-def _job_from_mqtt_payload(payload: Dict[str, Any]) -> Optional[Job]:
-    try:
-        chart_id = int(payload.get("chartId"))
-    except (TypeError, ValueError):
-        return None
-
-    original_path = str(payload.get("originalPath") or "").strip()
-    raw_job_id = payload.get("jobId")
-    raw_message_id = payload.get("messageId")
-
-    processing_job_id = None
-    if raw_job_id is not None:
-        try:
-            processing_job_id = int(raw_job_id)
-        except (TypeError, ValueError):
-            processing_job_id = None
-
-    message_id = str(raw_message_id).strip() if raw_message_id is not None else None
-
-    return Job(
-        chart_id=chart_id,
-        original_path=original_path,
-        processing_job_id=processing_job_id,
-        message_id=message_id,
-    )
-
-
-def _mqtt_event_message_id(job: Job, event_type: str) -> str:
-    if event_type == "heartbeat":
-        base = job.message_id or (f"job-{job.processing_job_id}" if job.processing_job_id is not None else f"chart-{job.chart_id}")
-        return f"{base}:heartbeat:{uuid.uuid4().hex[:12]}"
-    if job.message_id:
-        return f"{job.message_id}:{event_type}"
-    if job.processing_job_id is not None:
-        return f"job-{job.processing_job_id}:{event_type}"
-    return f"chart-{job.chart_id}:{event_type}"
-
-
-def _mqtt_event_base(job: Job, event_type: str) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
-        "schemaVersion": 1,
-        "messageId": _mqtt_event_message_id(job, event_type),
-        "chartId": job.chart_id,
-        "workerId": _worker_id(),
-    }
-    if job.processing_job_id is not None:
-        payload["jobId"] = job.processing_job_id
-    if job.message_id:
-        payload["requestMessageId"] = job.message_id
-    return payload
-
-
-def _publish_accepted_event(transport: MqttTransport, job: Job) -> None:
-    payload = _mqtt_event_base(job, "accepted")
-    _publish_mqtt_event(transport, transport.accepted_topic, payload)
-
-
-def _publish_heartbeat_event(transport: MqttTransport, job: Job) -> None:
-    payload = _mqtt_event_base(job, "heartbeat")
-    _publish_mqtt_event(transport, transport.heartbeat_topic, payload)
-
-
-def _publish_completed_event(
-    transport: MqttTransport,
-    job: Job,
-    result_json: Dict[str, Any],
-    n_panels: int,
-    n_series: int,
-) -> None:
-    payload = _mqtt_event_base(job, "completed")
-    payload["resultJson"] = result_json
-    payload["nPanels"] = n_panels
-    payload["nSeries"] = n_series
-    _publish_mqtt_event(transport, transport.completed_topic, payload)
-
-
-def _publish_failed_event(
-    transport: MqttTransport,
-    job: Job,
-    message: str,
-    *,
-    error_code: Optional[str] = None,
-    retryable: Optional[bool] = None,
-    result_json: Optional[Dict[str, Any]] = None,
-) -> None:
-    payload = _mqtt_event_base(job, "failed")
-    payload["errorMessage"] = message[:2000]
-    if error_code:
-        payload["errorCode"] = error_code
-    if retryable is not None:
-        payload["retryable"] = retryable
-    if result_json is not None:
-        payload["resultJson"] = result_json
-    _publish_mqtt_event(transport, transport.failed_topic, payload)
-
-
-def _heartbeat_publisher_loop(
-    transport: MqttTransport,
-    job: Job,
-    stop_event: threading.Event,
-) -> None:
-    while not stop_event.wait(transport.heartbeat_interval_seconds):
-        try:
-            _publish_heartbeat_event(transport, job)
-        except Exception as exc:
-            print(f"[WORKER] chart {job.chart_id}: HEARTBEAT publish failed -> {exc}")
-
-
-def _classify_worker_failure(exc: Exception) -> Tuple[str, bool]:
-    if isinstance(exc, PipelineError):
-        if exc.error_code is not None or exc.retryable is not None:
-            return exc.error_code or ERROR_PIPELINE_OUTPUT_INVALID, bool(exc.retryable)
-
-    message = str(exc).strip()
-    normalized = message.lower()
-
-    if "original file not found" in normalized or "original file path is missing" in normalized:
-        return ERROR_INPUT_FILE_MISSING, False
-
-    if isinstance(exc, PermissionError) or "permission denied" in normalized:
-        return ERROR_STORAGE_PERMISSION_DENIED, False
-
-    if "timeout" in normalized or "timed out" in normalized:
-        return ERROR_NETWORK_TIMEOUT, True
-
-    if (
-        "temporar" in normalized
-        or "connection refused" in normalized
-        or "connection reset" in normalized
-        or "service unavailable" in normalized
-        or "too many requests" in normalized
-        or "rate limit" in normalized
-        or "modal" in normalized
-        or " 502" in normalized
-        or " 503" in normalized
-        or " 504" in normalized
-    ):
-        return ERROR_MODAL_BACKEND_UNAVAILABLE, True
-
-    if "network" in normalized:
-        return ERROR_NETWORK_TIMEOUT, True
-
-    if isinstance(exc, PipelineError):
-        return ERROR_PIPELINE_OUTPUT_INVALID, False
-
-    return ERROR_UNEXPECTED_WORKER_ERROR, False
-
-
-def _process_job(job: Job, work_dir: Path) -> Tuple[Dict[str, Any], int, int]:
-    raw_original_path = (job.original_path or "").strip()
-    if raw_original_path in {"", "."}:
-        raise PipelineError(
-            "Original file path is missing",
-            error_code=ERROR_INPUT_FILE_MISSING,
-            retryable=False,
-        )
-
-    original_path = Path(raw_original_path)
-    if not original_path.is_file():
-        raise PipelineError(
-            f"Original file not found: {original_path}",
-            error_code=ERROR_INPUT_FILE_MISSING,
-            retryable=False,
-        )
-
-    return _run_plextract(job.chart_id, original_path, work_dir)
-
-
-def _run_polling_loop(conn, work_dir: Path, poll_interval: float) -> None:
-    while True:
-        job = _fetch_one_and_mark_processing(conn)
-        if not job:
-            time.sleep(poll_interval)
-            continue
-
-        chart_id = job.chart_id
-        try:
-            result_json, n_panels, n_series = _process_job(job, work_dir)
-            _mark_done(conn, chart_id, result_json, n_panels, n_series, processing_job_id=job.processing_job_id)
-            print(f"[WORKER] chart {chart_id}: DONE (series={n_series})")
-
-        except PipelineError as exc:
-            _mark_error(conn, chart_id, str(exc), result_json={"artifacts": exc.artifacts}, processing_job_id=job.processing_job_id)
-            print(f"[WORKER] chart {chart_id}: ERROR (with artifacts) -> {exc}")
-
-        except Exception as exc:
-            _mark_error(conn, chart_id, str(exc), processing_job_id=job.processing_job_id)
-            print(f"[WORKER] chart {chart_id}: ERROR -> {exc}")
-
-
-def _run_mqtt_loop(job_queue: Queue, transport: MqttTransport, work_dir: Path) -> None:
-    while True:
-        mqtt_payload = job_queue.get()
-        if not isinstance(mqtt_payload, dict):
-            continue
-
-        job = _job_from_mqtt_payload(mqtt_payload)
-        if not job:
-            print("[WORKER] MQTT payload skipped: missing chartId")
-            continue
-
-        heartbeat_stop = threading.Event()
-        heartbeat_thread: Optional[threading.Thread] = None
-
-        try:
-            _publish_accepted_event(transport, job)
-            heartbeat_thread = threading.Thread(
-                target=_heartbeat_publisher_loop,
-                args=(transport, job, heartbeat_stop),
-                daemon=True,
-            )
-            heartbeat_thread.start()
-            result_json, n_panels, n_series = _process_job(job, work_dir)
-            heartbeat_stop.set()
-            if heartbeat_thread.is_alive():
-                heartbeat_thread.join(timeout=2.0)
-            _publish_completed_event(transport, job, result_json, n_panels, n_series)
-            print(f"[WORKER] chart {job.chart_id}: DONE via MQTT (series={n_series})")
-
-        except PipelineError as exc:
-            heartbeat_stop.set()
-            if heartbeat_thread is not None and heartbeat_thread.is_alive():
-                heartbeat_thread.join(timeout=2.0)
-            error_code, retryable = _classify_worker_failure(exc)
-            _publish_failed_event(
-                transport,
-                job,
-                str(exc),
-                error_code=error_code,
-                retryable=retryable,
-                result_json={"artifacts": exc.artifacts},
-            )
-            print(f"[WORKER] chart {job.chart_id}: ERROR via MQTT (with artifacts) -> {exc}")
-
-        except Exception as exc:
-            heartbeat_stop.set()
-            if heartbeat_thread is not None and heartbeat_thread.is_alive():
-                heartbeat_thread.join(timeout=2.0)
-            error_code, retryable = _classify_worker_failure(exc)
-            _publish_failed_event(
-                transport,
-                job,
-                str(exc),
-                error_code=error_code,
-                retryable=retryable,
-            )
-            print(f"[WORKER] chart {job.chart_id}: ERROR via MQTT -> {exc}")
-        finally:
-            heartbeat_stop.set()
-            if heartbeat_thread is not None and heartbeat_thread.is_alive():
-                heartbeat_thread.join(timeout=2.0)
-
-
 def main() -> int:
     load_dotenv(Path(__file__).with_name(".env"))
 
@@ -1380,20 +821,37 @@ def main() -> int:
     work_dir = Path(os.getenv("WORK_DIR", str(Path.cwd() / "runs" / "worker"))).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    mqtt_enabled = _env_bool("MQTT_ENABLED", "0")
+    conn = _connect()
     print("[WORKER] started; work_dir =", work_dir)
 
-    if mqtt_enabled:
-        mqtt_jobs: Queue = Queue()
-        transport = _start_mqtt_transport(mqtt_jobs)
-        print("[WORKER] running in MQTT mode")
-        _run_mqtt_loop(mqtt_jobs, transport, work_dir)
-        return 0
+    while True:
+        job = _fetch_one_and_mark_processing(conn)
+        if not job:
+            time.sleep(poll_interval)
+            continue
 
-    conn = _connect()
-    print("[WORKER] running in polling mode")
-    _run_polling_loop(conn, work_dir, poll_interval)
-    return 0
+        chart_id = job.chart_id
+
+        try:
+            raw_original_path = (job.original_path or "").strip()
+            if raw_original_path in {"", "."}:
+                raise RuntimeError("Original file path is missing")
+
+            original_path = Path(raw_original_path)
+            if not original_path.is_file():
+                raise RuntimeError(f"Original file not found: {original_path}")
+
+            result_json, n_panels, n_series = _run_plextract(chart_id, original_path, work_dir)
+            _mark_done(conn, chart_id, result_json, n_panels, n_series)
+            print(f"[WORKER] chart {chart_id}: DONE (series={n_series})")
+
+        except PipelineError as e:
+            _mark_error(conn, chart_id, str(e), result_json={"artifacts": e.artifacts})
+            print(f"[WORKER] chart {chart_id}: ERROR (with artifacts) -> {e}")
+
+        except Exception as e:
+            _mark_error(conn, chart_id, str(e))
+            print(f"[WORKER] chart {chart_id}: ERROR -> {e}")
 
 
 if __name__ == "__main__":

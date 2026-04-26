@@ -193,6 +193,13 @@ public sealed class ChartApiService
             return (filePath, string.IsNullOrWhiteSpace(chart.MimeType) ? null : chart.MimeType);
         }
 
+        if (string.Equals(fileKey, "data", StringComparison.Ordinal))
+        {
+            var filePath = _storageService.GetDataJsonPath(chart);
+            EnsureFileExists(filePath);
+            return (filePath, "application/json; charset=utf-8");
+        }
+
         var payload = JsonHelpers.FromDocument(chart.ResultJson) as JsonObject;
         var artifacts = payload?["artifacts"] as JsonObject;
         var rawPath = JsonHelpers.GetString(artifacts?[fileKey]);
@@ -246,7 +253,9 @@ public sealed class ChartApiService
             case ChartExportFormat.json:
                 mediaType = "application/json; charset=utf-8";
                 fileName = $"chart_{chart.Id}.json";
-                return _exportService.ExportToJson(panels, panelId, seriesId, pretty);
+                var resultJson = JsonHelpers.FromDocument(chart.ResultJson) as JsonObject ?? new JsonObject();
+                resultJson = _editorOverlayService.EnsureEditorAlignment(chart.Id, resultJson);
+                return _exportService.ExportToJson(resultJson, panels, panelId, seriesId, pretty);
             default:
                 mediaType = "application/vnd.ms-excel";
                 fileName = $"chart_{chart.Id}_table.csv";
@@ -264,6 +273,12 @@ public sealed class ChartApiService
     public JsonObject EnsureEditorAlignment(int chartId, JsonObject resultJson) =>
         _editorOverlayService.EnsureEditorAlignment(chartId, resultJson);
 
+    public string GetDataJsonPath(Chart chart) =>
+        _storageService.GetDataJsonPath(chart);
+
+    public Task WriteDataJsonAsync(Chart chart, JsonObject resultJson, CancellationToken cancellationToken = default) =>
+        _storageService.WriteDataJsonAsync(chart, resultJson, cancellationToken);
+
     public JsonObject PreviewWithSelectedCubicPoints(int chartId, JsonObject baseResultJson, int totalPoints)
     {
         var aligned = _editorOverlayService.EnsureEditorAlignment(chartId, baseResultJson);
@@ -272,6 +287,17 @@ public sealed class ChartApiService
             aligned,
             panels,
             points => _cubicSelectionService.SelectCubicSplinePoints(points, totalPoints));
+        return _editorOverlayService.EnsureEditorAlignment(chartId, prepared);
+    }
+
+    public JsonObject PreviewWithRandomCubicPoints(int chartId, JsonObject baseResultJson, int totalPoints)
+    {
+        var aligned = _editorOverlayService.EnsureEditorAlignment(chartId, baseResultJson);
+        var panels = ParsePanels(aligned, StatusCodes.Status409Conflict, StatusCodes.Status500InternalServerError, "Export is not available yet", "Invalid panels format in result_json");
+        var prepared = _chartEditorService.BuildEditorResultJson(
+            aligned,
+            panels,
+            points => _cubicSelectionService.SelectAutoCubicSplinePoints(points, totalPoints));
         return _editorOverlayService.EnsureEditorAlignment(chartId, prepared);
     }
 

@@ -33,7 +33,7 @@ class ChartDete:
         from huggingface_hub import snapshot_download
         from mmdet.apis import init_detector
 
-        os.makedirs("huggingface", exist_ok=True)
+        os.makedirs("huggingface")
 
         snapshot_download("tdsone/chartdete", local_dir="huggingface")
 

@@ -12,6 +12,8 @@ export class ReactGraphEditor {
     bindables: {
       chartId: { mode: BindingMode.toView },
       resultJson: { mode: BindingMode.toView },
+      highlightResultJson: { mode: BindingMode.toView },
+      showOnlyHighlightPoints: { mode: BindingMode.toView },
       onResultJsonChange: { mode: BindingMode.toView },
       mode: { mode: BindingMode.toView },
       backdropImageUrl: { mode: BindingMode.toView },
@@ -21,6 +23,8 @@ export class ReactGraphEditor {
 
   public chartId = 0;
   public resultJson: unknown = null;
+  public highlightResultJson: unknown = null;
+  public showOnlyHighlightPoints = false;
   public onResultJsonChange?: (next: unknown) => void;
   public mode: 'compact' | 'full' = 'full';
   public backdropImageUrl?: string;
@@ -51,6 +55,14 @@ export class ReactGraphEditor {
     this.renderReact();
   }
 
+  public highlightResultJsonChanged(): void {
+    this.renderReact();
+  }
+
+  public showOnlyHighlightPointsChanged(): void {
+    this.renderReact();
+  }
+
   public modeChanged(): void {
     this.renderReact();
   }
@@ -75,6 +87,8 @@ export class ReactGraphEditor {
     this.root.render(createElement(GraphEditor, {
       chartId: this.chartId,
       resultJson: this.resultJson,
+      highlightResultJson: this.highlightResultJson,
+      showOnlyHighlightPoints: this.showOnlyHighlightPoints,
       backdropImageUrl: this.backdropImageUrl,
       showBackdrop: this.showBackdrop,
       uiMode: this.mode,

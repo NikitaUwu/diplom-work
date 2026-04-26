@@ -83,11 +83,37 @@
               ${showOriginalBackdrop ? 'Скрыть подложку' : 'Показать подложку'}
             </button>
 
-            <a
-              load.bind="`/charts/${chartId}/spline-points`"
-              class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
-              Сплайн по N
-            </a>
+            <div class="flex flex-col gap-2">
+              <a
+                load.bind="`/charts/${chartId}/spline-points`"
+                class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+                Сплайн по N
+              </a>
+
+              <button
+                type="button"
+                click.trigger="buildAutoSpline()"
+                disabled.bind="!canBuildAutoSpline"
+                class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+                ${autoSplineLoading ? 'Автосплайн…' : 'Автосплайн'}
+              </button>
+
+              <button
+                type="button"
+                click.trigger="toggleOnlyAutoSplinePoints()"
+                disabled.bind="!hasAutoSplineResult"
+                class="inline-flex h-10 items-center rounded-xl border px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${showOnlyAutoSplinePoints ? 'border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-500 dark:bg-amber-950/50 dark:text-amber-200' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'}">
+                ${showOnlyAutoSplinePoints ? 'Показать все точки' : 'Только точки сплайна'}
+              </button>
+
+              <button
+                type="button"
+                click.trigger="toggleAutoSplineHighlight()"
+                disabled.bind="!hasAutoSplineResult"
+                class="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+                ${showAutoSplineHighlight ? 'Скрыть выделение' : 'Показать выделение'}
+              </button>
+            </div>
 
             <button
               type="button"
@@ -99,12 +125,22 @@
           </div>
         </div>
 
+        <div if.bind="autoSplineError" class="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300">
+          ${autoSplineError}
+        </div>
+
+        <div if.bind="autoSplineResultJson" class="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700 dark:border-sky-900/40 dark:bg-sky-950/40 dark:text-sky-300">
+          Автосплайн подобрал ${autoSplineSelectedPointCount} опорные точки для наилучшего кубического сплайна, и они будут сохранены в JSON.
+        </div>
+
         <div class="mt-6">
           <react-graph-editor
             chart-id.bind="chartId"
             backdrop-image-url.bind="backdropImageUrl"
             show-backdrop.bind="showOriginalBackdrop"
             result-json.bind="editorResultJson"
+            highlight-result-json.bind="visibleAutoSplineResultJson"
+            show-only-highlight-points.bind="showOnlyAutoSplinePoints"
             mode="full"
             on-result-json-change.bind="onEditorResultJsonChange">
           </react-graph-editor>

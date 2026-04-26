@@ -14,23 +14,27 @@ with ocr_img.imports():
     import io
     import json
     import os
+    import torch
     from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
 
 @app.cls(
     image=ocr_img,
+    gpu="any",
     volumes={"/data": vol},
 )
 class OCRModel:
     @modal.enter()
     def enter(self):
+        self.device = torch.device("cuda:0")
         self.processor = TrOCRProcessor.from_pretrained(
             "microsoft/trocr-base-handwritten"
         )
         self.model = VisionEncoderDecoderModel.from_pretrained(
             "microsoft/trocr-base-handwritten"
         )
-        pass
+        self.model.to(self.device)
+        self.model.eval()
 
     @method()
     def inference(self, path: Path):
@@ -38,10 +42,11 @@ class OCRModel:
         vol.reload()
 
         # Open the image file
-        image = Image.open(path)
+        image = Image.open(path).convert("RGB")
 
-        pixel_values = self.processor(image, return_tensors="pt").pixel_values
-        generated_ids = self.model.generate(pixel_values)
+        pixel_values = self.processor(image, return_tensors="pt").pixel_values.to(self.device)
+        with torch.inference_mode():
+            generated_ids = self.model.generate(pixel_values)
 
         generated_text = self.processor.batch_decode(
             generated_ids, skip_special_tokens=True

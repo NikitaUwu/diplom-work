@@ -5,12 +5,15 @@ import {
   chartExportUrl,
   chartFileUrl,
   getChart,
+  previewChartRandomSplinePoints,
   saveChartResult,
   type ChartCreateResponse,
   type ChartExportFormat,
 } from '../../api/client';
 import { buildArtifactsCarousel, chartStatusBadgeClass, chartStatusLabel, hasRenderableEditorResult } from '../shared/chart-utils';
 import { sessionState } from '../state/session-state';
+
+const AUTO_SPLINE_MIN_POINT_COUNT = 3;
 
 export class ChartPage implements IRouteableComponent {
   public static readonly $au = { type: 'custom-element', name: 'chart-page', template };
@@ -22,6 +25,12 @@ export class ChartPage implements IRouteableComponent {
   public error = '';
   public pollError = '';
   public editedResultJson: unknown = null;
+  public autoSplineHighlightResultJson: unknown = null;
+  public autoSplineError = '';
+  public autoSplineLoading = false;
+  public autoSplinePointCount = 0;
+  public showOnlyAutoSplinePoints = false;
+  public showAutoSplineHighlight = true;
   public saveError = '';
   public saving = false;
   public showOriginalBackdrop = false;
@@ -32,6 +41,13 @@ export class ChartPage implements IRouteableComponent {
 
   public readonly onEditorResultJsonChange = (next: unknown) => {
     this.setDraftResultJson(next);
+    this.autoSplineHighlightResultJson = this.extractStoredAutoSplineResultJson(next);
+    this.autoSplineError = '';
+    this.autoSplinePointCount = this.deriveStoredAutoSplinePointCount(this.autoSplineHighlightResultJson);
+    if (!this.autoSplineHighlightResultJson) {
+      this.showOnlyAutoSplinePoints = false;
+      this.showAutoSplineHighlight = true;
+    }
   };
 
   public async loading(parameters: Record<string, string>): Promise<void> {
@@ -45,6 +61,12 @@ export class ChartPage implements IRouteableComponent {
     this.chartId = Number(parameters.id ?? 0);
     this.chart = null;
     this.editedResultJson = null;
+    this.autoSplineHighlightResultJson = null;
+    this.autoSplineError = '';
+    this.autoSplineLoading = false;
+    this.autoSplinePointCount = 0;
+    this.showOnlyAutoSplinePoints = false;
+    this.showAutoSplineHighlight = true;
     this.saveError = '';
     this.error = '';
     this.pollError = '';
@@ -99,12 +121,40 @@ export class ChartPage implements IRouteableComponent {
     return this.editedResultJson ?? this.serverResultJson;
   }
 
+  public get autoSplineResultJson(): unknown {
+    return this.autoSplineHighlightResultJson ?? this.extractStoredAutoSplineResultJson(this.editorResultJson);
+  }
+
+  public get visibleAutoSplineResultJson(): unknown {
+    if (!this.showAutoSplineHighlight) {
+      return null;
+    }
+
+    return this.autoSplineResultJson;
+  }
+
+  public get autoSplineSelectedPointCount(): number {
+    if (this.autoSplinePointCount > 0) {
+      return this.autoSplinePointCount;
+    }
+
+    return this.deriveStoredAutoSplinePointCount(this.autoSplineResultJson);
+  }
+
+  public get hasAutoSplineResult(): boolean {
+    return this.autoSplineSelectedPointCount > 0;
+  }
+
   public get dirty(): boolean {
     return this.editedResultJson !== null;
   }
 
   public get canSave(): boolean {
     return this.chart?.status === 'done' && this.dirty && this.hasRenderableEditorDraft && !this.saving;
+  }
+
+  public get canBuildAutoSpline(): boolean {
+    return this.chart?.status === 'done' && this.hasRenderableEditorDraft && !this.autoSplineLoading;
   }
 
   public get hasExportableResult(): boolean {
@@ -119,8 +169,56 @@ export class ChartPage implements IRouteableComponent {
     this.showOriginalBackdrop = !this.showOriginalBackdrop;
   }
 
+  public toggleOnlyAutoSplinePoints(): void {
+    if (!this.hasAutoSplineResult) {
+      this.showOnlyAutoSplinePoints = false;
+      return;
+    }
+
+    this.showOnlyAutoSplinePoints = !this.showOnlyAutoSplinePoints;
+    if (this.showOnlyAutoSplinePoints) {
+      this.showAutoSplineHighlight = true;
+    }
+  }
+
+  public toggleAutoSplineHighlight(): void {
+    if (!this.hasAutoSplineResult) {
+      this.showAutoSplineHighlight = true;
+      return;
+    }
+
+    this.showAutoSplineHighlight = !this.showAutoSplineHighlight;
+    if (!this.showAutoSplineHighlight) {
+      this.showOnlyAutoSplinePoints = false;
+    }
+  }
+
   public get backdropImageUrl(): string | undefined {
     return this.chart ? chartFileUrl(this.chart.id, 'original') : undefined;
+  }
+
+  public async buildAutoSpline(): Promise<void> {
+    if (!this.chart || !this.canBuildAutoSpline) {
+      return;
+    }
+
+    this.autoSplineLoading = true;
+    this.autoSplineError = '';
+    this.autoSplinePointCount = AUTO_SPLINE_MIN_POINT_COUNT;
+    this.showAutoSplineHighlight = true;
+
+    try {
+      const preview = await previewChartRandomSplinePoints(this.chart.id, this.autoSplinePointCount, this.editorResultJson);
+      const nextDraft = this.withStoredAutoSpline(this.editorResultJson, preview.resultJson ?? null, this.autoSplinePointCount);
+      this.autoSplineHighlightResultJson = this.extractStoredAutoSplineResultJson(nextDraft);
+      this.autoSplinePointCount = this.deriveStoredAutoSplinePointCount(this.autoSplineHighlightResultJson);
+      this.setDraftResultJson(nextDraft);
+    } catch (error) {
+      this.autoSplineHighlightResultJson = null;
+      this.autoSplineError = error instanceof Error ? error.message : 'Ошибка построения автосплайна';
+    } finally {
+      this.autoSplineLoading = false;
+    }
   }
 
   public async save(): Promise<void> {
@@ -135,6 +233,9 @@ export class ChartPage implements IRouteableComponent {
       const fresh = await saveChartResult(this.chart.id, this.editedResultJson);
       this.chart = fresh;
       this.editedResultJson = null;
+      this.autoSplineHighlightResultJson = this.extractStoredAutoSplineResultJson(fresh.resultJson ?? null);
+      this.autoSplineError = '';
+      this.autoSplinePointCount = 0;
     } catch (error) {
       this.saveError = error instanceof Error ? error.message : 'Ошибка сохранения';
     } finally {
@@ -177,6 +278,158 @@ export class ChartPage implements IRouteableComponent {
     }
 
     return value;
+  }
+
+  private withStoredAutoSpline(baseResultJson: unknown, previewResultJson: unknown, selectedPointCount: number): unknown {
+    const next = this.cloneJsonObject(baseResultJson);
+    const autoSpline = this.buildAutoSplinePayload(baseResultJson, previewResultJson, selectedPointCount);
+
+    if (autoSpline) {
+      next.auto_spline = autoSpline;
+    } else {
+      delete next.auto_spline;
+    }
+
+    return next;
+  }
+
+  private buildAutoSplinePayload(baseResultJson: unknown, previewResultJson: unknown, selectedPointCount: number): Record<string, unknown> | null {
+    const previewPanels = this.getPanels(previewResultJson);
+    if (previewPanels.length === 0) {
+      return null;
+    }
+
+    const basePanels = this.getPanels(baseResultJson);
+    const panels: Record<string, unknown>[] = previewPanels
+      .map((previewPanel, panelIndex) => {
+        const previewSeries = this.getSeries(previewPanel);
+        const baseSeries = this.getSeries(basePanels[panelIndex]);
+        const nextSeries: Record<string, unknown>[] = previewSeries
+          .map((previewSeriesItem, seriesIndex) => {
+            const baseSeriesItem = baseSeries[seriesIndex];
+            const sourceSeriesId = this.stringValue(baseSeriesItem?.id) ?? this.stringValue(previewSeriesItem?.id) ?? `series_${panelIndex + 1}_${seriesIndex + 1}`;
+            const sourceName = this.stringValue(baseSeriesItem?.name) ?? this.stringValue(previewSeriesItem?.name) ?? `Кривая ${seriesIndex + 1}`;
+            const points = this.clonePointList(previewSeriesItem?.points);
+            const curvePoints = this.clonePointList(previewSeriesItem?.curve_points);
+
+            if (points.length === 0 && curvePoints.length === 0) {
+              return null;
+            }
+
+            return {
+              id: `${sourceSeriesId}_spline`,
+              source_series_id: sourceSeriesId,
+              name: `${sourceName}_spline`,
+              source_name: sourceName,
+              points,
+              curve_points: curvePoints,
+            };
+          })
+          .filter((series) => series !== null) as Record<string, unknown>[];
+
+        if (nextSeries.length === 0) {
+          return null;
+        }
+
+        return {
+          id: this.stringValue(previewPanel?.id) ?? this.stringValue(basePanels[panelIndex]?.id) ?? `panel_${panelIndex + 1}`,
+          series: nextSeries,
+        };
+      })
+      .filter((panel) => panel !== null) as Record<string, unknown>[];
+
+    if (panels.length === 0) {
+      return null;
+    }
+
+    const actualSelectedPointCount = this.deriveStoredAutoSplinePointCount({ panels });
+
+    return {
+      selected_point_count: actualSelectedPointCount > 0 ? actualSelectedPointCount : selectedPointCount,
+      panels,
+    };
+  }
+
+  private extractStoredAutoSplineResultJson(source: unknown): unknown {
+    if (!source || typeof source !== 'object') {
+      return null;
+    }
+
+    const raw = (source as Record<string, unknown>).auto_spline;
+    if (!raw || typeof raw !== 'object') {
+      return null;
+    }
+
+    const panels = (raw as Record<string, unknown>).panels;
+    if (!Array.isArray(panels)) {
+      return null;
+    }
+
+    return { panels: this.cloneJsonValue(panels) };
+  }
+
+  private deriveStoredAutoSplinePointCount(source: unknown): number {
+    if (!source || typeof source !== 'object') {
+      return 0;
+    }
+
+    const explicitCount = Number((source as Record<string, unknown>).selected_point_count ?? 0);
+    if (Number.isFinite(explicitCount) && explicitCount > 0) {
+      return Math.round(explicitCount);
+    }
+
+    const panels = this.getPanels(source);
+    const firstSeries = panels.flatMap(panel => this.getSeries(panel))[0];
+    return this.clonePointList(firstSeries?.points).length;
+  }
+
+  private getPanels(source: unknown): Record<string, unknown>[] {
+    if (!source || typeof source !== 'object') {
+      return [];
+    }
+
+    const panels = (source as Record<string, unknown>).panels;
+    return Array.isArray(panels)
+      ? panels.filter((panel): panel is Record<string, unknown> => !!panel && typeof panel === 'object')
+      : [];
+  }
+
+  private getSeries(source: Record<string, unknown> | undefined): Record<string, unknown>[] {
+    if (!source) {
+      return [];
+    }
+
+    const series = source.series;
+    return Array.isArray(series)
+      ? series.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+      : [];
+  }
+
+  private clonePointList(source: unknown): number[][] {
+    if (!Array.isArray(source)) {
+      return [];
+    }
+
+    return source
+      .filter((point): point is unknown[] => Array.isArray(point) && point.length >= 2)
+      .map((point) => [Number(point[0]), Number(point[1])])
+      .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+  }
+
+  private stringValue(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value : null;
+  }
+
+  private cloneJsonObject(source: unknown): Record<string, unknown> {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      return {};
+    }
+
+    return this.cloneJsonValue(source) as Record<string, unknown>;
+  }
+
+  private cloneJsonValue<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
   }
 
   private async loadOnce(options: { softOnError?: boolean } = {}): Promise<boolean> {

@@ -9,28 +9,10 @@ public sealed class CubicSelectionService
         int refinePasses = 2,
         int refineRadius = 30)
     {
-        var sortedPoints = points
-            .Select(point => (X: point.X, Y: point.Y))
-            .OrderBy(point => point.X)
-            .ToList();
-
-        var count = sortedPoints.Count;
-        if (totalPoints < 2)
-        {
-            throw new ArgumentOutOfRangeException(nameof(totalPoints), "totalPoints must be at least 2");
-        }
-
-        if (count <= 2 || totalPoints >= count)
+        var sortedPoints = NormalizePoints(points, totalPoints, out var count, out var hasStrictlyIncreasingX);
+        if (!hasStrictlyIncreasingX || count <= 2 || totalPoints >= count)
         {
             return sortedPoints;
-        }
-
-        for (var index = 1; index < sortedPoints.Count; index++)
-        {
-            if (sortedPoints[index].X <= sortedPoints[index - 1].X)
-            {
-                return sortedPoints;
-            }
         }
 
         var selected = new List<int> { 0, count - 1 };
@@ -117,6 +99,108 @@ public sealed class CubicSelectionService
         }
 
         return selected.OrderBy(index => index).Select(index => sortedPoints[index]).ToList();
+    }
+
+    public List<(double X, double Y)> SelectAutoCubicSplinePoints(
+        IEnumerable<(double X, double Y)> points,
+        int minimumPoints = 3,
+        string metric = "max",
+        int refinePasses = 2,
+        int refineRadius = 30)
+    {
+        var requestedMinimum = Math.Max(2, minimumPoints);
+        var sortedPoints = NormalizePoints(points, requestedMinimum, out var count, out var hasStrictlyIncreasingX);
+        if (!hasStrictlyIncreasingX || count <= 2 || requestedMinimum >= count)
+        {
+            return sortedPoints;
+        }
+
+        var effectiveMinimum = Math.Max(3, requestedMinimum);
+        var yMin = sortedPoints.Min(point => point.Y);
+        var yMax = sortedPoints.Max(point => point.Y);
+        var yRange = Math.Abs(yMax - yMin);
+        var maxErrorTolerance = Math.Max(1d, yRange * 0.02d);
+        var rmseTolerance = Math.Max(0.5d, yRange * 0.01d);
+
+        var bestSelected = sortedPoints;
+        var bestMaxError = double.PositiveInfinity;
+        var bestRmse = double.PositiveInfinity;
+
+        for (var totalPoints = effectiveMinimum; totalPoints <= count; totalPoints++)
+        {
+            var candidate = SelectCubicSplinePoints(sortedPoints, totalPoints, metric, refinePasses, refineRadius);
+            var interpolate = BuildInterpolator(candidate);
+            var maxError = CalculateMetric(sortedPoints, interpolate, "max");
+            var rmse = CalculateMetric(sortedPoints, interpolate, "rmse");
+
+            if (maxError < bestMaxError ||
+                (Math.Abs(maxError - bestMaxError) <= double.Epsilon && rmse < bestRmse))
+            {
+                bestSelected = candidate;
+                bestMaxError = maxError;
+                bestRmse = rmse;
+            }
+
+            if (maxError <= maxErrorTolerance && rmse <= rmseTolerance)
+            {
+                return candidate;
+            }
+        }
+
+        return bestSelected;
+    }
+
+    public List<(double X, double Y)> SelectRandomCubicSplinePoints(
+        IEnumerable<(double X, double Y)> points,
+        int totalPoints)
+    {
+        var sortedPoints = NormalizePoints(points, totalPoints, out var count, out var hasStrictlyIncreasingX);
+        if (!hasStrictlyIncreasingX || count <= 2 || totalPoints >= count)
+        {
+            return sortedPoints;
+        }
+
+        var random = Random.Shared;
+        var interiorIndices = Enumerable.Range(1, Math.Max(0, count - 2))
+            .OrderBy(_ => random.Next())
+            .Take(Math.Max(0, totalPoints - 2))
+            .OrderBy(index => index)
+            .ToList();
+
+        var selected = new List<int> { 0 };
+        selected.AddRange(interiorIndices);
+        selected.Add(count - 1);
+        return selected.Select(index => sortedPoints[index]).ToList();
+    }
+
+    private static List<(double X, double Y)> NormalizePoints(
+        IEnumerable<(double X, double Y)> points,
+        int totalPoints,
+        out int count,
+        out bool hasStrictlyIncreasingX)
+    {
+        var sortedPoints = points
+            .Select(point => (X: point.X, Y: point.Y))
+            .OrderBy(point => point.X)
+            .ToList();
+
+        count = sortedPoints.Count;
+        if (totalPoints < 2)
+        {
+            throw new ArgumentOutOfRangeException(nameof(totalPoints), "totalPoints must be at least 2");
+        }
+
+        hasStrictlyIncreasingX = true;
+        for (var index = 1; index < sortedPoints.Count; index++)
+        {
+            if (sortedPoints[index].X <= sortedPoints[index - 1].X)
+            {
+                hasStrictlyIncreasingX = false;
+                break;
+            }
+        }
+
+        return sortedPoints;
     }
 
     private static Func<double, double> BuildInterpolator(List<(double X, double Y)> points)

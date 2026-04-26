@@ -41,6 +41,8 @@ public sealed class ChartSplinePointsRequest
 {
     [Range(2, int.MaxValue)]
     public int TotalPoints { get; set; } = 3;
+
+    public JsonObject? ResultJson { get; set; }
 }
 
 public sealed class ChartResponse

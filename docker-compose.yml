@@ -1,0 +1,112 @@
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: plextract_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d plextract_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: always
+    ports:
+      - "1883:1883"
+    networks:
+      - default
+
+  backend:
+    build:
+      context: .
+      dockerfile: diplomWork/Dockerfile
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: Host=db;Port=5432;Database=plextract_db;Username=admin;Password=password
+      ASPNETCORE_URLS: http://+:8080
+      AUTH_ENABLED: "false"
+      JWT_SECRET_KEY: super_secret_key_12345
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      CORS_ORIGINS: http://localhost,http://localhost:80,http://localhost:5173,http://frontend
+      STORAGE_DIR: /app/storage
+      WORKER_RUNS_ROOT: /app/runs/worker
+      MQTT_ENABLED: "true"
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+    volumes:
+      - backend_storage:/app/storage
+      - ml_runs:/app/runs
+    depends_on:
+      db:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api/v1
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_started
+
+  ml-worker:
+    build: ./ml-worker
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://admin:password@db:5432/plextract_db
+      PYTHONUNBUFFERED: "1"
+      STORAGE_DIR: /app/storage
+      WORK_DIR: /app/runs/worker
+      MQTT_BROKER: mqtt
+      MQTT_PORT: "1883"
+    volumes:
+      - backend_storage:/app/storage
+      - ml_runs:/app/runs
+      - ml_model_cache:/root/.cache
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+      mqtt:
+        condition: service_started
+    command: >
+      bash -c "sleep 15 && python worker_local.py"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  postgres_data:
+  backend_storage:
+  ml_runs:
+  ml_model_cache:
+  model_weights:
+
+networks:
+  default:
+    name: diplom-work1_default

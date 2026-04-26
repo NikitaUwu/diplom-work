@@ -13,12 +13,14 @@ public sealed class ProcessingJobStateService
 {
     private readonly AppDbContext _db;
     private readonly AppOptions _options;
+    private readonly ChartStorageService _chartStorageService;
     private readonly ILogger<ProcessingJobStateService> _logger;
 
-    public ProcessingJobStateService(AppDbContext db, AppOptions options, ILogger<ProcessingJobStateService> logger)
+    public ProcessingJobStateService(AppDbContext db, AppOptions options, ChartStorageService chartStorageService, ILogger<ProcessingJobStateService> logger)
     {
         _db = db;
         _options = options;
+        _chartStorageService = chartStorageService;
         _logger = logger;
     }
 
@@ -113,7 +115,10 @@ public sealed class ProcessingJobStateService
         JsonNode? payloadNode,
         CancellationToken cancellationToken)
     {
-        return await ExecuteWithInboxAsync(topic, payload, payloadNode, cancellationToken, async () =>
+        Chart? chartForDataJson = null;
+        JsonObject? resultJsonForDataJson = null;
+
+        var applied = await ExecuteWithInboxAsync(topic, payload, payloadNode, cancellationToken, async () =>
         {
             var context = await LoadContextAsync(payload, cancellationToken);
             if (context is null)
@@ -166,6 +171,18 @@ public sealed class ProcessingJobStateService
             chart.NPanels = payload.NPanels ?? nPanels;
             chart.NSeries = payload.NSeries ?? nSeries;
         });
+
+        if (applied)
+        {
+            chartForDataJson = await _db.Charts.FirstOrDefaultAsync(item => item.Id == payload.ChartId, cancellationToken);
+            resultJsonForDataJson = payload.ResultJson as JsonObject;
+            if (chartForDataJson is not null && resultJsonForDataJson is not null)
+            {
+                await _chartStorageService.WriteDataJsonAsync(chartForDataJson, resultJsonForDataJson, cancellationToken);
+            }
+        }
+
+        return applied;
     }
 
     public async Task<bool> ApplyFailedAsync(
@@ -174,7 +191,10 @@ public sealed class ProcessingJobStateService
         JsonNode? payloadNode,
         CancellationToken cancellationToken)
     {
-        return await ExecuteWithInboxAsync(topic, payload, payloadNode, cancellationToken, async () =>
+        Chart? chartForDataJson = null;
+        JsonObject? resultJsonForDataJson = null;
+
+        var applied = await ExecuteWithInboxAsync(topic, payload, payloadNode, cancellationToken, async () =>
         {
             var context = await LoadContextAsync(payload, cancellationToken);
             if (context is null)
@@ -227,6 +247,18 @@ public sealed class ProcessingJobStateService
                 chart.ResultJson = JsonHelpers.ToDocument(resultJson);
             }
         });
+
+        if (applied)
+        {
+            chartForDataJson = await _db.Charts.FirstOrDefaultAsync(item => item.Id == payload.ChartId, cancellationToken);
+            resultJsonForDataJson = payload.ResultJson as JsonObject;
+            if (chartForDataJson is not null && resultJsonForDataJson is not null)
+            {
+                await _chartStorageService.WriteDataJsonAsync(chartForDataJson, resultJsonForDataJson, cancellationToken);
+            }
+        }
+
+        return applied;
     }
 
     public async Task<int> ExpireTimedOutJobsAsync(CancellationToken cancellationToken)

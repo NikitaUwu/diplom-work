@@ -49,6 +49,7 @@ public sealed class ChartsController : ControllerBase
         if (string.Equals(chart.Status, ChartStatus.done.ToString(), StringComparison.OrdinalIgnoreCase) &&
             response.ResultJson is JsonObject preparedResultJson)
         {
+            var dataJsonPath = _chartApiService.GetDataJsonPath(chart);
             var currentJson = JsonHelpers.FromDocument(chart.ResultJson)?.ToJsonString();
             var nextJson = preparedResultJson.ToJsonString();
             if (!string.Equals(currentJson, nextJson, StringComparison.Ordinal))
@@ -59,6 +60,11 @@ public sealed class ChartsController : ControllerBase
                     ? panelsForSeries.OfType<JsonObject>().Sum(panel => (panel["series"] as JsonArray)?.Count ?? 0)
                     : chart.NSeries;
                 await _db.SaveChangesAsync(cancellationToken);
+                await _chartApiService.WriteDataJsonAsync(chart, preparedResultJson, cancellationToken);
+            }
+            else if (!System.IO.File.Exists(dataJsonPath))
+            {
+                await _chartApiService.WriteDataJsonAsync(chart, preparedResultJson, cancellationToken);
             }
         }
 
@@ -70,6 +76,13 @@ public sealed class ChartsController : ControllerBase
     {
         var currentUser = await _currentUserService.RequireCurrentUserAsync(HttpContext, cancellationToken);
         var chart = await _chartApiService.GetUserChartOrThrowAsync(chartId, currentUser.Id, cancellationToken);
+        if (string.Equals(fileKey, "data", StringComparison.OrdinalIgnoreCase) &&
+            !System.IO.File.Exists(_chartApiService.GetDataJsonPath(chart)) &&
+            JsonHelpers.FromDocument(chart.ResultJson) is JsonObject resultJson)
+        {
+            await _chartApiService.WriteDataJsonAsync(chart, resultJson, cancellationToken);
+        }
+
         var (filePath, mediaType) = _chartApiService.ResolveChartFile(chart, fileKey);
         return PhysicalFile(filePath, mediaType ?? "application/octet-stream");
     }
@@ -107,6 +120,7 @@ public sealed class ChartsController : ControllerBase
         chart.NPanels = panels.Count;
         chart.NSeries = panels.Sum(panel => panel.Series.Count);
         await _db.SaveChangesAsync(cancellationToken);
+        await _chartApiService.WriteDataJsonAsync(chart, preparedResultJson, cancellationToken);
         return _chartApiService.ToChartResponse(chart, preparedResultJson);
     }
 
@@ -120,8 +134,23 @@ public sealed class ChartsController : ControllerBase
             throw new ApiProblemException(StatusCodes.Status409Conflict, "Chart is not ready for editing");
         }
 
-        var baseResultJson = JsonHelpers.FromDocument(chart.ResultJson) as System.Text.Json.Nodes.JsonObject ?? new();
+        var baseResultJson = payload.ResultJson ?? JsonHelpers.FromDocument(chart.ResultJson) as JsonObject ?? new();
         var preparedResultJson = _chartApiService.PreviewWithSelectedCubicPoints(chart.Id, baseResultJson, payload.TotalPoints);
+        return _chartApiService.ToChartResponse(chart, preparedResultJson);
+    }
+
+    [HttpPost("{chartId:int}/cubic-preview-random")]
+    public async Task<ActionResult<ChartResponse>> CubicPreviewRandom(int chartId, [FromBody] ChartSplinePointsRequest payload, CancellationToken cancellationToken)
+    {
+        var currentUser = await _currentUserService.RequireCurrentUserAsync(HttpContext, cancellationToken);
+        var chart = await _chartApiService.GetUserChartOrThrowAsync(chartId, currentUser.Id, cancellationToken);
+        if (!string.Equals(chart.Status, ChartStatus.done.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ApiProblemException(StatusCodes.Status409Conflict, "Chart is not ready for editing");
+        }
+
+        var baseResultJson = payload.ResultJson ?? JsonHelpers.FromDocument(chart.ResultJson) as JsonObject ?? new();
+        var preparedResultJson = _chartApiService.PreviewWithRandomCubicPoints(chart.Id, baseResultJson, payload.TotalPoints);
         return _chartApiService.ToChartResponse(chart, preparedResultJson);
     }
 

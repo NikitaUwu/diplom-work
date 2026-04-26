@@ -51,3 +51,4 @@ infra/mosquitto/data/*
 infra/mosquitto/log/*
 !infra/mosquitto/data/.gitkeep
 !infra/mosquitto/log/.gitkeep
+ml-worker/extract-line-chart-data.zip
