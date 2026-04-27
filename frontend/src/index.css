@@ -4,7 +4,8 @@
 :root { color-scheme: light; }
 .dark { color-scheme: dark; }
 
-html, body, my-app, au-viewport { height: 100%; }
+html, body, my-app { height: 100%; }
+au-viewport { min-height: 100%; display: block; }
 
 body {
   margin: 0;

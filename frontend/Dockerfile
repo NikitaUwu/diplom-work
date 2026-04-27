@@ -3,6 +3,7 @@ ARG VITE_API_BASE_URL=/api/v1
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY scripts/ ./scripts/
 RUN npm ci
 COPY . .
 RUN npm run build

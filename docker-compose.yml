@@ -91,14 +91,14 @@ services:
       mqtt:
         condition: service_started
     command: >
-      bash -c "sleep 15 && python worker_local.py"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      bash -c "sleep 15 && python ml-worker/extract-line-chart-data/worker_local.py"
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
 volumes:
   postgres_data:

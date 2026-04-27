@@ -20,6 +20,9 @@ public sealed class DatabaseInitializationService
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        // Сначала создаём таблицу users, если её нет
+        await _db.Database.EnsureCreatedAsync(cancellationToken);
+
         const string sql = """
             ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS role VARCHAR(32) NOT NULL DEFAULT 'user';
             UPDATE users SET role = LOWER(BTRIM(role)) WHERE role IS NOT NULL;
