@@ -1,5 +1,5 @@
-import type { IRouter } from '@aurelia/router-direct';
 import { login, logout, me, register, type LoginRequest, type RegisterRequest, type UserRead } from '../../api/client';
+import { navigateTo } from '../navigation';
 
 class SessionState {
   public user: UserRead | null = null;
@@ -53,23 +53,23 @@ class SessionState {
     }
   }
 
-  public async ensureAuthenticated(router: IRouter, redirectTo = '/login'): Promise<boolean> {
+  public async ensureAuthenticated(redirectTo = '/login'): Promise<boolean> {
     const user = await this.restore();
     if (user) {
       return true;
     }
 
-    await router.load(redirectTo);
+    navigateTo(redirectTo);
     return false;
   }
 
-  public async redirectIfAuthenticated(router: IRouter, redirectTo = '/upload'): Promise<boolean> {
+  public async redirectIfAuthenticated(redirectTo = '/upload'): Promise<boolean> {
     const user = await this.restore();
     if (!user) {
       return false;
     }
 
-    await router.load(redirectTo);
+    navigateTo(redirectTo);
     return true;
   }
 }

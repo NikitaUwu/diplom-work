@@ -1,5 +1,3 @@
-import { resolve } from 'aurelia';
-import { IRouter, type IRouteableComponent } from '@aurelia/router-direct';
 import template from './chart-page.html?raw';
 import {
   chartFileUrl,
@@ -14,10 +12,8 @@ import { sessionState } from '../state/session-state';
 
 const AUTO_SPLINE_MIN_POINT_COUNT = 3;
 
-export class ChartPage implements IRouteableComponent {
+export class ChartPage {
   public static readonly $au = { type: 'custom-element', name: 'chart-page', template };
-
-  private readonly router = resolve(IRouter);
 
   public chartId = 0;
   public chart: ChartCreateResponse | null = null;
@@ -54,15 +50,19 @@ export class ChartPage implements IRouteableComponent {
     }
   };
 
-  public async loading(parameters: Record<string, string>): Promise<void> {
-    const ok = await sessionState.ensureAuthenticated(this.router);
+  public async binding(): Promise<void> {
+    await this.loadForCurrentUrl();
+  }
+
+  public async loadForCurrentUrl(): Promise<void> {
+    const ok = await sessionState.ensureAuthenticated();
     if (!ok) {
       return;
     }
 
     this.stopPolling();
 
-    this.chartId = Number(parameters.id ?? 0);
+    this.chartId = this.readChartId();
     this.chart = null;
     this.editedResultJson = null;
     this.autoSplineHighlightResultJson = null;
@@ -89,6 +89,11 @@ export class ChartPage implements IRouteableComponent {
 
   public detaching(): void {
     this.stopPolling();
+  }
+
+  private readChartId(): number {
+    const match = window.location.pathname.match(/^\/charts\/(\d+)\/?$/);
+    return Number(match?.[1] ?? 0);
   }
 
   public get chartStatusText(): string {

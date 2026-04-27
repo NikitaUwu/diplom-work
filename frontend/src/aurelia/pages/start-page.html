@@ -56,28 +56,28 @@
         <div class="mt-6 flex flex-col gap-3">
           <a
             if.bind="!session.isAuthenticated"
-            load="/login"
+            href="/login"
             class="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-900 px-5 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
             Войти
           </a>
 
           <a
             if.bind="!session.isAuthenticated"
-            load="/register"
+            href="/register"
             class="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
             Зарегистрироваться
           </a>
 
           <a
             if.bind="session.isAuthenticated"
-            load="/upload"
+            href="/upload"
             class="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-900 px-5 text-sm font-medium text-white transition hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
             Загрузить график
           </a>
 
           <a
             if.bind="session.isAuthenticated"
-            load="/results"
+            href="/results"
             class="inline-flex h-12 items-center justify-center rounded-2xl border border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
             Открыть результаты
           </a>

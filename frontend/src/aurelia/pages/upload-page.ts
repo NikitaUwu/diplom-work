@@ -1,14 +1,11 @@
-import { resolve } from 'aurelia';
-import { IRouter, type IRouteableComponent } from '@aurelia/router-direct';
 import template from './upload-page.html?raw';
 import { getChart, uploadChart, type ChartCreateResponse } from '../../api/client';
+import { navigateTo } from '../navigation';
 import { chartStatusBadgeClass, chartStatusLabel, hasRenderableEditorResult } from '../shared/chart-utils';
 import { sessionState } from '../state/session-state';
 
-export class UploadPage implements IRouteableComponent {
+export class UploadPage {
   public static readonly $au = { type: 'custom-element', name: 'upload-page', template };
-
-  private readonly router = resolve(IRouter);
 
   public file: File | null = null;
   public previewUrl = '';
@@ -18,8 +15,8 @@ export class UploadPage implements IRouteableComponent {
 
   private pollTimer: number | null = null;
 
-  public async loading(): Promise<void> {
-    const ok = await sessionState.ensureAuthenticated(this.router);
+  public async binding(): Promise<void> {
+    const ok = await sessionState.ensureAuthenticated();
     if (!ok) {
       return;
     }
@@ -101,13 +98,13 @@ export class UploadPage implements IRouteableComponent {
 
         if (fresh.status === 'error') {
           this.stopPolling();
-          await this.router.load(`/charts/${chartId}`);
+          navigateTo(`/charts/${chartId}`);
           return;
         }
 
         if (fresh.status === 'done' && hasRenderableEditorResult(fresh.resultJson)) {
           this.stopPolling();
-          await this.router.load(`/charts/${chartId}`);
+          navigateTo(`/charts/${chartId}`);
         }
       } catch (error) {
         this.stopPolling();

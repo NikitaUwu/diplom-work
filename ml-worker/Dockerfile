@@ -13,8 +13,8 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# PyTorch CPU-only
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# PyTorch CPU-only. Keep this in sync with the mmcv-full wheel index below.
+RUN pip install --no-cache-dir torch==2.1.0+cpu torchvision==0.16.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # Копируем requirements и ставим пакеты
 COPY extract-line-chart-data/requirements.txt .

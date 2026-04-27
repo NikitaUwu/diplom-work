@@ -1,5 +1,3 @@
-import { resolve } from 'aurelia';
-import { IRouter, type IRouteableComponent } from '@aurelia/router-direct';
 import template from './results-page.html?raw';
 import {
   deleteChart,
@@ -11,18 +9,16 @@ import { downloadSeriesCsv, downloadSeriesJson, extractAutoSplinePayload, hasExp
 import { buildArtifactsCarousel, chartStatusBadgeClass, chartStatusLabel } from '../shared/chart-utils';
 import { sessionState } from '../state/session-state';
 
-export class ResultsPage implements IRouteableComponent {
+export class ResultsPage {
   public static readonly $au = { type: 'custom-element', name: 'results-page', template };
-
-  private readonly router = resolve(IRouter);
 
   public items: ChartCreateResponse[] = [];
   public isLoading = true;
   public error = '';
   public deletingId: number | null = null;
 
-  public async loading(): Promise<void> {
-    const ok = await sessionState.ensureAuthenticated(this.router);
+  public async binding(): Promise<void> {
+    const ok = await sessionState.ensureAuthenticated();
     if (!ok) {
       return;
     }

@@ -33,10 +33,12 @@ services:
       - "8080:8080"
     environment:
       DATABASE_URL: Host=db;Port=5432;Database=plextract_db;Username=admin;Password=password
+      ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
       AUTH_ENABLED: "false"
-      JWT_SECRET_KEY: super_secret_key_12345
+      JWT_SECRET_KEY: diplom_work_dev_jwt_secret_key_32_chars_minimum_2026
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      MAX_UPLOAD_BYTES: "52428800"
       CORS_ORIGINS: http://localhost,http://localhost:80,http://localhost:5173,http://frontend
       STORAGE_DIR: /app/storage
       WORKER_RUNS_ROOT: /app/runs/worker
@@ -64,7 +66,7 @@ services:
         VITE_API_BASE_URL: /api/v1
     restart: always
     ports:
-      - "80:80"
+      - "5173:80"
     depends_on:
       backend:
         condition: service_started
