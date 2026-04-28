@@ -68,7 +68,7 @@ builder.Services.AddSwaggerGen(options =>
         return controller switch
         {
             "Auth" => ["Аутентификация"],
-            "AdminUsers" => ["Администрирование пользователей"],
+            "AdminUsers" => ["Администрирование пользователей(если что убрать можно будет)"],
             "Charts" => ["Графики"],
             _ => [controller ?? "API"],
         };
@@ -184,17 +184,17 @@ app.MapGet("/admin/processing/overview", async (HttpContext httpContext, AdminAc
 {
     await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
     return Results.Json(await overviewService.GetSnapshotAsync(cancellationToken));
-}).WithTags("Прочее");
+}).WithTags("Прочее").ExcludeFromDescription();
 app.MapGet("/admin/processing/diagnostics", async (HttpContext httpContext, AdminAccessService adminAccessService, ProcessingDiagnosticsService diagnosticsService, CancellationToken cancellationToken) =>
 {
     await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
     return Results.Json(await diagnosticsService.GetSnapshotAsync(cancellationToken));
-}).WithTags("Прочее");
+}).WithTags("Прочее").ExcludeFromDescription();
 app.MapGet("/admin/processing/dashboard", async (HttpContext httpContext, AdminAccessService adminAccessService, ProcessingDashboardPageService dashboardPageService, CancellationToken cancellationToken) =>
 {
     await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
     return Results.Content(dashboardPageService.Render(), "text/html; charset=utf-8");
-}).WithTags("Прочее");
+}).WithTags("Прочее").ExcludeFromDescription();
 app.MapControllers();
 
 app.Run();

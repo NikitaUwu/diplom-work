@@ -73,6 +73,8 @@ public sealed class SwaggerGenerationTests
         var curvePointsOperation = document.Paths["/api/v1/charts/{chartId}/spline/curve-points"].Operations[OperationType.Post];
         Assert.False(previewOperation.RequestBody?.Required ?? true);
         Assert.False(curvePointsOperation.RequestBody?.Required ?? true);
+        Assert.DoesNotContain("/api/v1/admin/users", document.Paths.Keys);
+        Assert.DoesNotContain("/api/v1/admin/users/{userId}/role", document.Paths.Keys);
         Assert.DoesNotContain("/api/v1/charts/upload", document.Paths.Keys);
         Assert.DoesNotContain("/api/v1/charts/{chartId}/cubic-preview", document.Paths.Keys);
         Assert.DoesNotContain("/api/v1/charts/{chartId}/cubic-preview-random", document.Paths.Keys);

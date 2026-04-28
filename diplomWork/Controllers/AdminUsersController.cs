@@ -8,6 +8,7 @@ namespace DiplomWork.Controllers;
 /// Административные методы для управления пользователями.
 /// </summary>
 [ApiController]
+[ApiExplorerSettings(IgnoreApi = true)]
 [Route("api/v1/admin/users")]
 public sealed class AdminUsersController : ControllerBase
 {
