@@ -175,11 +175,7 @@ public sealed class ChartSplineSeriesResponse
 
     public string ApproximationMethod { get; set; } = "cubic_spline";
 
-    public List<ChartPointResponse> SourcePoints { get; set; } = [];
-
     public List<ChartPointResponse> ControlPoints { get; set; } = [];
-
-    public List<ChartPointResponse> CurvePoints { get; set; } = [];
 }
 
 /// <summary>

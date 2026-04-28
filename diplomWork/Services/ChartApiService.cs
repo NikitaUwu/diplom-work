@@ -340,14 +340,11 @@ public sealed class ChartApiService
             {
                 var sourcePoints = series.Points.ToList();
                 var controlPoints = SelectSplineControlPoints(sourcePoints, controlPointMode, totalControlPoints);
-                var curvePoints = _splineService.SampleCubicSpline(controlPoints, response.SamplesPerSeries);
                 panelResponse.Series.Add(new ChartSplineSeriesResponse
                 {
                     Id = series.Id,
                     Name = series.Name,
-                    SourcePoints = sourcePoints.Select(ToPointResponse).ToList(),
                     ControlPoints = controlPoints.Select(ToPointResponse).ToList(),
-                    CurvePoints = curvePoints.Select(ToPointResponse).ToList(),
                 });
             }
 
@@ -439,9 +436,7 @@ public sealed class ChartApiService
                     Name = JsonHelpers.GetString(autoSeriesObject["source_name"])
                         ?? baseSeries.Series?.Name
                         ?? JsonHelpers.GetString(autoSeriesObject["name"]),
-                    SourcePoints = (baseSeries.Series?.Points ?? controlPoints).Select(ToPointResponse).ToList(),
                     ControlPoints = controlPoints.Select(ToPointResponse).ToList(),
-                    CurvePoints = curvePointResponses,
                 });
             }
 

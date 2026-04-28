@@ -140,9 +140,7 @@ public sealed class ChartApiServiceTests
         var series = Assert.Single(panel.Series);
         Assert.Equal("series_0", series.Id);
         Assert.Equal("cubic_spline", series.ApproximationMethod);
-        Assert.Equal(4, series.SourcePoints.Count);
         Assert.Equal(3, series.ControlPoints.Count);
-        Assert.True(series.CurvePoints.Count >= 51);
     }
 
     [Fact]
@@ -182,9 +180,7 @@ public sealed class ChartApiServiceTests
 
         var panel = Assert.Single(response.Panels);
         var series = Assert.Single(panel.Series);
-        Assert.Equal(3, series.SourcePoints.Count);
         Assert.Equal(3, series.ControlPoints.Count);
-        Assert.True(series.CurvePoints.Count >= 20);
     }
 
     [Fact]
@@ -263,9 +259,7 @@ public sealed class ChartApiServiceTests
         Assert.Equal("s", panel.XUnit);
         var series = Assert.Single(panel.Series);
         Assert.Equal("series_0", series.Id);
-        Assert.Equal(4, series.SourcePoints.Count);
         Assert.Equal(3, series.ControlPoints.Count);
-        Assert.Equal(3, series.CurvePoints.Count);
     }
 
     [Fact]

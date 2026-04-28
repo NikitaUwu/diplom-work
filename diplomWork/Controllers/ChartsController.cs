@@ -209,7 +209,6 @@ public sealed class ChartsController : ControllerBase
         [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] GenerateSplineCurvePointsRequest? payload,
         CancellationToken cancellationToken)
     {
-        var requestBodyWasOmitted = payload is null;
         payload ??= new GenerateSplineCurvePointsRequest();
         var (chart, baseResultJson) = await GetEditableChartContextAsync(chartId, payload.ResultJson, cancellationToken);
         if (JsonHelpers.IsNullOrEmptyObject(payload.ResultJson) && payload.ControlPointMode == SplineControlPointMode.auto)
@@ -217,7 +216,7 @@ public sealed class ChartsController : ControllerBase
             var storedResponse = _chartApiService.TryBuildStoredAutoSplineCurvePointsResponse(
                 chart.Id,
                 baseResultJson,
-                requestBodyWasOmitted ? null : payload.TotalControlPoints,
+                requestedTotalControlPoints: null,
                 payload.SamplesPerSeries);
             if (storedResponse is not null)
             {
