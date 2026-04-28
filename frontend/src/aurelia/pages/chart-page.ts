@@ -2,7 +2,7 @@ import template from './chart-page.html?raw';
 import {
   chartFileUrl,
   getChart,
-  previewChartRandomSplinePoints,
+  previewChartAutoSplinePoints,
   saveChartResult,
   type ChartCreateResponse,
 } from '../../api/client';
@@ -227,7 +227,7 @@ export class ChartPage {
     this.showAutoSplineHighlight = true;
 
     try {
-      const preview = await previewChartRandomSplinePoints(this.chart.id, this.autoSplinePointCount, this.editorResultJson);
+      const preview = await previewChartAutoSplinePoints(this.chart.id, this.autoSplinePointCount, this.editorResultJson);
       const nextDraft = this.withStoredAutoSpline(this.editorResultJson, preview.resultJson ?? null, this.autoSplinePointCount);
       this.autoSplineHighlightResultJson = this.extractStoredAutoSplineResultJson(nextDraft);
       this.autoSplinePointCount = this.deriveStoredAutoSplinePointCount(this.autoSplineHighlightResultJson);

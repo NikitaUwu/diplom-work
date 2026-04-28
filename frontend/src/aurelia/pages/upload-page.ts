@@ -12,6 +12,7 @@ export class UploadPage {
   public isUploading = false;
   public chart: ChartCreateResponse | null = null;
   public error = '';
+  public lineformerUsePreprocessing = true;
 
   private pollTimer: number | null = null;
 
@@ -70,7 +71,7 @@ export class UploadPage {
     this.isUploading = true;
 
     try {
-      const response = await uploadChart(this.file);
+      const response = await uploadChart(this.file, this.lineformerUsePreprocessing);
       this.chart = response;
       this.startPolling(response.id);
     } catch (error) {

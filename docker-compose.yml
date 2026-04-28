@@ -36,13 +36,13 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
       AUTH_ENABLED: "false"
-      JWT_SECRET_KEY: diplom_work_dev_jwt_secret_key_32_chars_minimum_2026
+      JWT_SECRET_KEY: 1234567890qwertyuiopasdfghjklzxcvbnm1234567890
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "60"
       MAX_UPLOAD_BYTES: "52428800"
       CORS_ORIGINS: http://localhost,http://localhost:80,http://localhost:5173,http://frontend
       STORAGE_DIR: /app/storage
       WORKER_RUNS_ROOT: /app/runs/worker
-      MQTT_ENABLED: "true"
+      MQTT_ENABLED: "false"
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
     volumes:
@@ -79,12 +79,21 @@ services:
       PYTHONUNBUFFERED: "1"
       STORAGE_DIR: /app/storage
       WORK_DIR: /app/runs/worker
+      MQTT_ENABLED: "false"
       MQTT_BROKER: mqtt
       MQTT_PORT: "1883"
+      MQTT_STATUS_QOS: "1"
+      MQTT_PUBLISH_ACK_TIMEOUT_SECONDS: "10"
+      MQTT_PUBLISH_MAX_ATTEMPTS: "5"
+      MQTT_PUBLISH_RETRY_DELAY_SECONDS: "2"
+      LINEFORMER_MODEL_DIR: /app/lineformer
+      LINEFORMER_CHECKPOINT: /app/lineformer/iter_1800.pth
+      LINEFORMER_CONFIG: /app/lineformer/lineformer_swin_t_config.py
     volumes:
       - backend_storage:/app/storage
       - ml_runs:/app/runs
       - ml_model_cache:/root/.cache
+      - ./ml-worker/weight:/app/lineformer:ro
     depends_on:
       db:
         condition: service_healthy

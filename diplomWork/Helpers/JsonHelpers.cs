@@ -21,6 +21,11 @@ public static class JsonHelpers
         return node as JsonObject ?? new JsonObject();
     }
 
+    public static bool IsNullOrEmptyObject(JsonObject? node)
+    {
+        return node is null || !node.Any();
+    }
+
     public static JsonObject DeepCloneObject(JsonObject node)
     {
         return JsonNode.Parse(node.ToJsonString())?.AsObject() ?? new JsonObject();

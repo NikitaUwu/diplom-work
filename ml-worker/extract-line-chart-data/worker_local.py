@@ -100,10 +100,29 @@ def _env_int(name: str, default: int) -> int:
     return value
 
 
+def _to_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if not raw:
+            return default
+        return raw not in {"0", "false", "no", "off"}
+    return default
+
+
 PIPELINE_MAX_INPUT_SIZE = max(0, _env_int("PIPELINE_MAX_INPUT_SIZE", 1600))
 PIPELINE_MIN_INPUT_SIZE = max(128, _env_int("PIPELINE_MIN_INPUT_SIZE", 512))
 PIPELINE_OOM_MAX_RETRIES = max(0, _env_int("PIPELINE_OOM_MAX_RETRIES", 4))
 PIPELINE_OOM_SHRINK_FACTOR = max(0.3, min(0.95, float(os.getenv("PIPELINE_OOM_SHRINK_FACTOR") or "0.8")))
+MQTT_STATUS_QOS = max(0, min(1, _env_int("MQTT_STATUS_QOS", 1)))
+MQTT_PUBLISH_ACK_TIMEOUT_SECONDS = max(0, _env_int("MQTT_PUBLISH_ACK_TIMEOUT_SECONDS", 2))
+MQTT_PUBLISH_MAX_ATTEMPTS = max(1, _env_int("MQTT_PUBLISH_MAX_ATTEMPTS", 5))
+MQTT_PUBLISH_RETRY_DELAY_SECONDS = max(1, _env_int("MQTT_PUBLISH_RETRY_DELAY_SECONDS", 2))
 
 
 def _save_pipeline_input(src_file: Path, dst_path: Path, max_size: int) -> int:
@@ -142,7 +161,13 @@ def _release_cuda_memory() -> None:
         pass
 
 
-def _run_extract_with_adaptive_downscale(src_file: Path, dst_path: Path, input_dir: Path, output_dir: Path) -> int:
+def _run_extract_with_adaptive_downscale(
+    src_file: Path,
+    dst_path: Path,
+    input_dir: Path,
+    output_dir: Path,
+    lineformer_use_preprocessing: bool,
+) -> int:
     """Run the pipeline, shrinking the input image on CUDA OOM errors."""
     current_size = PIPELINE_MAX_INPUT_SIZE
     last_error: Optional[BaseException] = None
@@ -156,7 +181,12 @@ def _run_extract_with_adaptive_downscale(src_file: Path, dst_path: Path, input_d
         print(f"[PIPELINE] attempt {attempt + 1}: input max dimension = {actual_size}px (cap {current_size or 'unbounded'})")
 
         try:
-            extract(input_dir=str(input_dir), output_dir=str(output_dir), backend="local")
+            extract(
+                input_dir=str(input_dir),
+                output_dir=str(output_dir),
+                backend="local",
+                lineformer_use_preprocessing=lineformer_use_preprocessing,
+            )
             return actual_size
         except Exception as exc:
             if not _is_cuda_oom(exc):
@@ -180,6 +210,7 @@ class Job:
     original_path: str
     job_id: int = None
     message_id: str = None
+    lineformer_use_preprocessing: bool = True
 
 
 _job_queue: "queue.Queue[Job]" = queue.Queue()
@@ -206,6 +237,7 @@ def _fetch_next_db_job(conn) -> Optional[Job]:
                 SELECT
                     job.id AS job_id,
                     job.message_id AS message_id,
+                    job.request_payload AS request_payload,
                     chart.id AS chart_id,
                     chart.original_path AS original_path
                 FROM processing_jobs AS job
@@ -256,6 +288,10 @@ def _fetch_next_db_job(conn) -> Optional[Job]:
                 original_path=str(row["original_path"]),
                 job_id=int(row["job_id"]),
                 message_id=str(row["message_id"]) if row["message_id"] is not None else None,
+                lineformer_use_preprocessing=_to_bool(
+                    (row["request_payload"] or {}).get("lineformerUsePreprocessing"),
+                    True,
+                ),
             )
 
 
@@ -346,8 +382,30 @@ def _mark_db_error(
                 )
 
 
-def _publish_processing_event(mqtt_client, topic: str, payload: Dict[str, Any]) -> None:
-    mqtt_client.publish(topic, json.dumps(payload))
+def _publish_processing_event(mqtt_client, topic: str, payload: Dict[str, Any], wait_for_ack: bool = False) -> bool:
+    attempts = MQTT_PUBLISH_MAX_ATTEMPTS if wait_for_ack else 1
+    payload_json = json.dumps(payload)
+    success_rc = getattr(mqtt, "MQTT_ERR_SUCCESS", 0)
+
+    for attempt in range(1, attempts + 1):
+        try:
+            message_info = mqtt_client.publish(topic, payload_json, qos=MQTT_STATUS_QOS)
+            if message_info.rc != success_rc:
+                print(f"[MQTT_WARN] Publish failed for topic {topic}: rc={message_info.rc}, attempt={attempt}/{attempts}")
+            elif wait_for_ack and MQTT_STATUS_QOS > 0 and MQTT_PUBLISH_ACK_TIMEOUT_SECONDS > 0:
+                message_info.wait_for_publish(timeout=MQTT_PUBLISH_ACK_TIMEOUT_SECONDS)
+                if message_info.is_published():
+                    return True
+                print(f"[MQTT_WARN] Publish ack timeout for topic {topic}, attempt={attempt}/{attempts}")
+            else:
+                return True
+        except Exception as exc:
+            print(f"[MQTT_WARN] Publish exception for topic {topic}, attempt={attempt}/{attempts}: {exc}")
+
+        if attempt < attempts:
+            time.sleep(MQTT_PUBLISH_RETRY_DELAY_SECONDS)
+
+    return False
 
 
 def _write_result_json_to_storage(result_json: Dict[str, Any], src_file: Path, storage_dir: Path) -> str:
@@ -378,7 +436,11 @@ def _start_heartbeat_loop(mqtt_client, chart_id: int, job_id: Optional[int], mes
     return stop_event, thread
 
 
-def _execute_pipeline(chart_id: int, original_path: str) -> tuple[Dict[str, Any], str, int, int]:
+def _execute_pipeline(
+    chart_id: int,
+    original_path: str,
+    lineformer_use_preprocessing: bool = True,
+) -> tuple[Dict[str, Any], str, int, int]:
     src_file = Path(original_path)
     storage_dir = _storage_dir_from_original(src_file)
     if not src_file.is_absolute():
@@ -396,7 +458,13 @@ def _execute_pipeline(chart_id: int, original_path: str) -> tuple[Dict[str, Any]
         raise FileNotFoundError(f"File not found: {src_file}")
 
     dst_path = input_dir / src_file.name
-    _run_extract_with_adaptive_downscale(src_file, dst_path, input_dir, output_dir)
+    _run_extract_with_adaptive_downscale(
+        src_file,
+        dst_path,
+        input_dir,
+        output_dir,
+        lineformer_use_preprocessing,
+    )
 
     data_files = list(output_dir.rglob("data.json"))
     if not data_files:
@@ -448,8 +516,9 @@ def _build_failed_result_json(error_message: str, error_code: str) -> Dict[str, 
     }
 
 
-def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=None):
+def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=None, lineformer_use_preprocessing=True):
     print(f"\n[WORKER] >>> Processing chart ID: {chart_id}")
+    print(f"[WORKER] LineFormer preprocessing: {lineformer_use_preprocessing}")
 
     accepted_payload = {
         "schemaVersion": 1,
@@ -463,7 +532,11 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
     heartbeat_stop, heartbeat_thread = _start_heartbeat_loop(mqtt_client, chart_id, job_id, message_id)
 
     try:
-        _, result_json_path, n_panels, n_series = _execute_pipeline(chart_id, original_path)
+        _, result_json_path, n_panels, n_series = _execute_pipeline(
+            chart_id,
+            original_path,
+            lineformer_use_preprocessing,
+        )
 
         import torch
         if torch.cuda.is_available():
@@ -485,7 +558,8 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
             "completedAt": datetime.now().isoformat()
         }
 
-        _publish_processing_event(mqtt_client, MQTT_COMPLETED_TOPIC, completed_payload)
+        if not _publish_processing_event(mqtt_client, MQTT_COMPLETED_TOPIC, completed_payload, wait_for_ack=True):
+            print(f"[MQTT_ERROR] Completed event was not acknowledged for chart {chart_id}, job {job_id}")
 
     except Exception as e:
         print(f"[ERROR] {e}")
@@ -515,7 +589,8 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
             "failedAt": datetime.now().isoformat()
         }
 
-        _publish_processing_event(mqtt_client, MQTT_FAILED_TOPIC, failed_payload)
+        if not _publish_processing_event(mqtt_client, MQTT_FAILED_TOPIC, failed_payload, wait_for_ack=True):
+            print(f"[MQTT_ERROR] Failed event was not acknowledged for chart {chart_id}, job {job_id}")
     finally:
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=1)
@@ -524,7 +599,11 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
 def _process_db_job(conn, job: Job) -> None:
     print(f"[WORKER] Processing chart {job.chart_id} (DB mode)")
     try:
-        result_json, _, n_panels, n_series = _execute_pipeline(job.chart_id, job.original_path)
+        result_json, _, n_panels, n_series = _execute_pipeline(
+            job.chart_id,
+            job.original_path,
+            job.lineformer_use_preprocessing,
+        )
         _mark_db_done(conn, job, result_json, n_panels, n_series)
         print(f"[WORKER] Chart {job.chart_id} done (DB mode)")
     except Exception as e:
@@ -555,7 +634,14 @@ def _job_worker(mqtt_client):
     while True:
         job = _job_queue.get()
         try:
-            process_job(job.chart_id, job.original_path, mqtt_client, job.job_id, job.message_id)
+            process_job(
+                job.chart_id,
+                job.original_path,
+                mqtt_client,
+                job.job_id,
+                job.message_id,
+                job.lineformer_use_preprocessing,
+            )
         except Exception as e:
             print(f"[WORKER_ERROR] Job {job.chart_id} failed: {e}")
         finally:
@@ -588,6 +674,7 @@ def on_message(client, userdata, msg):
         original_path = task_data.get("originalPath")
         job_id = task_data.get("jobId")
         message_id = task_data.get("messageId")
+        lineformer_use_preprocessing = _to_bool(task_data.get("lineformerUsePreprocessing"), True)
 
         if chart_id and original_path:
             print(f"[WORKER] Queuing job {chart_id}")
@@ -597,7 +684,8 @@ def on_message(client, userdata, msg):
                 chart_id=int(chart_id), 
                 original_path=str(original_path),
                 job_id=job_id,
-                message_id=message_id
+                message_id=message_id,
+                lineformer_use_preprocessing=lineformer_use_preprocessing,
             ))
         else:
             print(f"[MQTT_ERROR] Missing keys. Got: {list(task_data.keys())}")

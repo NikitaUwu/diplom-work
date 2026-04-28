@@ -1,86 +1,67 @@
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:10 +0000] "GET /results HTTP/1.1" 200 459 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:10 +0000] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:10 +0000] "GET /assets/index-CX3nEP4t.js HTTP/1.1" 304 0 "http://localhost/results" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:10 +0000] "GET /assets/index-YtyR-LNl.css HTTP/1.1" 304 0 "http://localhost/results" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"                                                                                                                                                                        
 
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:11 +0000] "GET /api/v1/auth/me HTTP/1.1" 200 117 "http://localhost/results" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"
-backend-1    | 2026-04-27 03:48:11 info: Microsoft.EntityFrameworkCore.Database.Command[20101]
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@___options_DevUserEmail_0='?'], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT u.id, u.created_at, u.email, u.hashed_password, u.is_active, u.role                                                                                                                            
-backend-1    |       FROM users AS u                                                                                                                                                                                       
-backend-1    |       WHERE u.email = @___options_DevUserEmail_0                                                                                                                                                            
-backend-1    |       LIMIT 1                                                                                                                                                                                               
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:11 +0000] "GET /assets/start-page-BSGB1cW3.js HTTP/1.1" 304 0 "http://localhost/assets/index-CX3nEP4t.js" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"
-backend-1    | 2026-04-27 03:48:11 info: Microsoft.EntityFrameworkCore.Database.Command[20101]
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@__now_0='?' (DbType = DateTime), @__p_1='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT m.id, m.attempt_count, m.available_at, m.created_at, m.direction, m.error_message, m.last_attempt_at, m.message_id, m.payload, m.processed_at, m.processing_job_id, m.status, m.topic          
-backend-1    |       FROM mqtt_messages AS m                                                                                                                                                                               
-backend-1    |       WHERE m.direction = 'out' AND m.status IN ('pending', 'error') AND (m.available_at IS NULL OR m.available_at <= @__now_0)                                                                             
-backend-1    |       ORDER BY m.created_at                                                                                                                                                                                 
-backend-1    |       LIMIT @__p_1                                                                                                                                                                                          
-backend-1    | 2026-04-27 03:48:13 info: Microsoft.EntityFrameworkCore.Database.Command[20101]                                                                                                                             
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@__now_0='?' (DbType = DateTime), @__p_1='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT m.id, m.attempt_count, m.available_at, m.created_at, m.direction, m.error_message, m.last_attempt_at, m.message_id, m.payload, m.processed_at, m.processing_job_id, m.status, m.topic          
-backend-1    |       FROM mqtt_messages AS m                                                                                                                                                                               
-backend-1    |       WHERE m.direction = 'out' AND m.status IN ('pending', 'error') AND (m.available_at IS NULL OR m.available_at <= @__now_0)                                                                             
-backend-1    |       ORDER BY m.created_at                                                                                                                                                                                 
-backend-1    |       LIMIT @__p_1                                                                                                                                                                                          
-backend-1    | 2026-04-27 03:48:15 info: Microsoft.EntityFrameworkCore.Database.Command[20101]                                                                                                                             
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@__now_0='?' (DbType = DateTime), @__p_1='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT m.id, m.attempt_count, m.available_at, m.created_at, m.direction, m.error_message, m.last_attempt_at, m.message_id, m.payload, m.processed_at, m.processing_job_id, m.status, m.topic          
-backend-1    |       FROM mqtt_messages AS m                                                                                                                                                                               
-backend-1    |       WHERE m.direction = 'out' AND m.status IN ('pending', 'error') AND (m.available_at IS NULL OR m.available_at <= @__now_0)                                                                             
-backend-1    |       ORDER BY m.created_at                                                                                                                                                                                 
-backend-1    |       LIMIT @__p_1                                                                                                                                                                                          
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:15 +0000] "POST /api/v1/auth/logout HTTP/1.1" 200 21 "http://localhost/results" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"
-backend-1    | 2026-04-27 03:48:17 info: Microsoft.EntityFrameworkCore.Database.Command[20101]
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@__now_0='?' (DbType = DateTime), @__p_1='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT m.id, m.attempt_count, m.available_at, m.created_at, m.direction, m.error_message, m.last_attempt_at, m.message_id, m.payload, m.processed_at, m.processing_job_id, m.status, m.topic          
-backend-1    |       FROM mqtt_messages AS m                                                                                                                                                                               
-backend-1    |       WHERE m.direction = 'out' AND m.status IN ('pending', 'error') AND (m.available_at IS NULL OR m.available_at <= @__now_0)                                                                             
-backend-1    |       ORDER BY m.created_at                                                                                                                                                                                 
-backend-1    |       LIMIT @__p_1                                                                                                                                                                                          
-backend-1    | 2026-04-27 03:48:19 info: Microsoft.EntityFrameworkCore.Database.Command[20101]                                                                                                                             
-backend-1    |       Executed DbCommand (2ms) [Parameters=[@__now_0='?' (DbType = DateTime)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT p.id, p.attempt, p.chart_id, p.created_at, p.error_code, p.error_message, p.finished_at, p.last_heartbeat_at, p.leased_until, p.message_id, p.next_retry_at, p.request_payload, p.result_payload, p.started_at, p.status, p.worker_id                                                                                                                                                                                     
-backend-1    |       FROM processing_jobs AS p
-backend-1    |       WHERE p.status = 'processing' AND p.leased_until IS NOT NULL AND p.leased_until < @__now_0                                                                                                            
-backend-1    |       ORDER BY p.leased_until                                                                                                                                                                               
-backend-1    | 2026-04-27 03:48:19 info: Microsoft.EntityFrameworkCore.Database.Command[20101]                                                                                                                             
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@__now_0='?' (DbType = DateTime), @__p_1='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT m.id, m.attempt_count, m.available_at, m.created_at, m.direction, m.error_message, m.last_attempt_at, m.message_id, m.payload, m.processed_at, m.processing_job_id, m.status, m.topic          
-backend-1    |       FROM mqtt_messages AS m                                                                                                                                                                               
-backend-1    |       WHERE m.direction = 'out' AND m.status IN ('pending', 'error') AND (m.available_at IS NULL OR m.available_at <= @__now_0)                                                                             
-backend-1    |       ORDER BY m.created_at                                                                                                                                                                                 
-backend-1    |       LIMIT @__p_1
-backend-1    | 2026-04-27 03:48:21 info: Microsoft.EntityFrameworkCore.Database.Command[20101]                                                                                                                             
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@__now_0='?' (DbType = DateTime), @__p_1='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT m.id, m.attempt_count, m.available_at, m.created_at, m.direction, m.error_message, m.last_attempt_at, m.message_id, m.payload, m.processed_at, m.processing_job_id, m.status, m.topic          
-backend-1    |       FROM mqtt_messages AS m                                                                                                                                                                               
-backend-1    |       WHERE m.direction = 'out' AND m.status IN ('pending', 'error') AND (m.available_at IS NULL OR m.available_at <= @__now_0)                                                                             
-backend-1    |       ORDER BY m.created_at                                                                                                                                                                                 
-backend-1    |       LIMIT @__p_1
-backend-1    | 2026-04-27 03:48:23 info: Microsoft.EntityFrameworkCore.Database.Command[20101]                                                                                                                             
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@__now_0='?' (DbType = DateTime), @__p_1='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT m.id, m.attempt_count, m.available_at, m.created_at, m.direction, m.error_message, m.last_attempt_at, m.message_id, m.payload, m.processed_at, m.processing_job_id, m.status, m.topic          
-backend-1    |       FROM mqtt_messages AS m                                                                                                                                                                               
-backend-1    |       WHERE m.direction = 'out' AND m.status IN ('pending', 'error') AND (m.available_at IS NULL OR m.available_at <= @__now_0)                                                                             
-backend-1    |       ORDER BY m.created_at                                                                                                                                                                                 
-backend-1    |       LIMIT @__p_1                                                                                                                                                                                          
-backend-1    | 2026-04-27 03:48:25 info: Microsoft.EntityFrameworkCore.Database.Command[20101]
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@__now_0='?' (DbType = DateTime), @__p_1='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT m.id, m.attempt_count, m.available_at, m.created_at, m.direction, m.error_message, m.last_attempt_at, m.message_id, m.payload, m.processed_at, m.processing_job_id, m.status, m.topic          
-backend-1    |       FROM mqtt_messages AS m                                                                                                                                                                               
-backend-1    |       WHERE m.direction = 'out' AND m.status IN ('pending', 'error') AND (m.available_at IS NULL OR m.available_at <= @__now_0)                                                                             
-backend-1    |       ORDER BY m.created_at                                                                                                                                                                                 
-backend-1    |       LIMIT @__p_1                                                                                                                                                                                          
-backend-1    | 2026-04-27 03:48:27 info: Microsoft.EntityFrameworkCore.Database.Command[20101]                                                                                                                             
-backend-1    |       Executed DbCommand (1ms) [Parameters=[@__now_0='?' (DbType = DateTime), @__p_1='?' (DbType = Int32)], CommandType='Text', CommandTimeout='30']
-backend-1    |       SELECT m.id, m.attempt_count, m.available_at, m.created_at, m.direction, m.error_message, m.last_attempt_at, m.message_id, m.payload, m.processed_at, m.processing_job_id, m.status, m.topic          
-backend-1    |       FROM mqtt_messages AS m                                                                                                                                                                               
-backend-1    |       WHERE m.direction = 'out' AND m.status IN ('pending', 'error') AND (m.available_at IS NULL OR m.available_at <= @__now_0)                                                                             
-backend-1    |       ORDER BY m.created_at                                                                                                                                                                                 
-backend-1    |       LIMIT @__p_1                                                                                                                                                                                          
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:28 +0000] "GET /auth HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:28 +0000] "GET /assets/index-YtyR-LNl.css HTTP/1.1" 304 0 "http://localhost/auth" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"
-frontend-1   | 172.18.0.1 - - [27/Apr/2026:03:48:28 +0000] "GET /assets/index-CX3nEP4t.js HTTP/1.1" 304 0 "http://localhost/auth" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 YaBrowser/26.3.0.0 Safari/537.36" "-"         
+#46 [ml-worker  5/10] COPY extract-line-chart-data/requirements.txt .
+#46 DONE 0.2s
+
+#47 [ml-worker  6/10] RUN pip install --no-cache-dir -r requirements.txt
+#47 0.620 Collecting git+https://github.com/tdsone/LineFormer.git@ea059eae00285657e5668217bdd48e5435a9800e (from -r requirements.txt (line 19))
+#47 0.621   Cloning https://github.com/tdsone/LineFormer.git (to revision ea059eae00285657e5668217bdd48e5435a9800e) to /tmp/pip-req-build-o9m4fki9
+#47 0.637   Running command git clone --filter=blob:none --quiet https://github.com/tdsone/LineFormer.git /tmp/pip-req-build-o9m4fki9
+#47 10.17   Running command git rev-parse -q --verify 'sha^ea059eae00285657e5668217bdd48e5435a9800e'
+#47 10.17   Running command git fetch -q https://github.com/tdsone/LineFormer.git ea059eae00285657e5668217bdd48e5435a9800e
+#47 30.96   fatal: unable to access 'https://github.com/tdsone/LineFormer.git/': Failed to connect to github.com port 443 after 21053 ms: Could not connect to server
+#47 30.97   error: subprocess-exited-with-error
+#47 30.97
+#47 30.97   × git fetch -q https://github.com/tdsone/LineFormer.git ea059eae00285657e5668217bdd48e5435a9800e did not run successfully.
+#47 30.97   │ exit code: 128
+#47 30.97   ╰─> See above for output.
+#47 30.97
+#47 30.97   note: This error originates from a subprocess, and is likely not a problem with pip.
+#47 30.97 error: subprocess-exited-with-error
+#47 30.97
+#47 30.97 × git fetch -q https://github.com/tdsone/LineFormer.git ea059eae00285657e5668217bdd48e5435a9800e did not run successfully.
+#47 30.97 │ exit code: 128
+#47 30.97 ╰─> See above for output.
+#47 30.97
+#47 30.97 note: This error originates from a subprocess, and is likely not a problem with pip.
+#47 31.75 
+#47 31.75 [notice] A new release of pip is available: 23.0.1 -> 26.1
+#47 31.75 [notice] To update, run: pip install --upgrade pip
+#47 ERROR: process "/bin/sh -c pip install --no-cache-dir -r requirements.txt" did not complete successfully: exit code: 1
+------
+ > [ml-worker  6/10] RUN pip install --no-cache-dir -r requirements.txt:
+30.97 error: subprocess-exited-with-error
+30.97
+30.97 × git fetch -q https://github.com/tdsone/LineFormer.git ea059eae00285657e5668217bdd48e5435a9800e did not run successfully.
+30.97 │ exit code: 128
+30.97 ╰─> See above for output.
+30.97
+30.97 note: This error originates from a subprocess, and is likely not a problem with pip.
+31.75
+31.75 [notice] A new release of pip is available: 23.0.1 -> 26.1
+31.75 [notice] To update, run: pip install --upgrade pip
+------
+[+] up 0/3
+ - Image diplom-work-backend   Building                                                                                                                   156.9s
+ - Image diplom-work-frontend  Building                                                                                                                   156.9s
+ - Image diplom-work-ml-worker Building                                                                                                                   156.9s
+Dockerfile:21
+
+--------------------
+
+  19 |     # Копируем requirements и ставим пакеты
+
+  20 |     COPY extract-line-chart-data/requirements.txt .
+
+  21 | >>> RUN pip install --no-cache-dir -r requirements.txt
+
+  22 |
+
+  23 |     # Установка mmcv
+
+--------------------
+
+target ml-worker: failed to solve: process "/bin/sh -c pip install --no-cache-dir -r requirements.txt" did not complete successfully: exit code: 1
+
+
+
+View build details: docker-desktop://dashboard/build/default/default/1dvx11bnaud6i1u00zqrp7dxp

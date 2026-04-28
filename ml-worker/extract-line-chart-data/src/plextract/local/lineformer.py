@@ -10,12 +10,16 @@ class LineFormer:
     def __init__(self, device: str = "cuda:0"):
         from lineformer import infer
         logger.info("Loading LineFormer (Robust Production Edition)...")
-        model_dir = Path.home() / ".cache" / "plextract" / "lineformer"
-        if not model_dir.exists():
+        model_dir = Path(os.getenv("LINEFORMER_MODEL_DIR", str(Path.home() / ".cache" / "plextract" / "lineformer"))).expanduser()
+        ckpt = Path(os.getenv("LINEFORMER_CHECKPOINT", str(model_dir / "iter_1800.pth"))).expanduser()
+        config = Path(os.getenv("LINEFORMER_CONFIG", str(model_dir / "lineformer_swin_t_config.py"))).expanduser()
+        if not ckpt.exists() or not config.exists():
             snapshot_download("tdsone/lineformer", local_dir=str(model_dir))
-        ckpt = os.getenv("LINEFORMER_CHECKPOINT", str(model_dir / "iter_1800.pth"))
-        config = str(model_dir / "lineformer_swin_t_config.py")
-        infer.load_model(config, ckpt, device)
+        if not ckpt.exists():
+            raise FileNotFoundError(f"LineFormer checkpoint not found: {ckpt}")
+        if not config.exists():
+            raise FileNotFoundError(f"LineFormer config not found: {config}")
+        infer.load_model(str(config), str(ckpt), device)
         preprocessing_env = os.getenv("LINEFORMER_USE_PREPROCESSING", "1").strip().lower()
         self.use_preprocessing = preprocessing_env not in {"0", "false", "no", "off"}
         logger.info(f"LineFormer checkpoint: {ckpt}")
@@ -48,18 +52,19 @@ class LineFormer:
         cv2.imwrite(str(results_path / "debug_preprocessed.png"), final_input)
         return final_input
 
-    def inference(self, input_path: str, output_dir: str) -> None:
+    def inference(self, input_path: str, output_dir: str, use_preprocessing: bool | None = None) -> None:
         from lineformer import infer
         from lineformer import line_utils
 
         img_name = Path(input_path).name
         results_base_folder = Path(output_dir) / img_name / "lineformer"
         os.makedirs(results_base_folder, exist_ok=True)
+        effective_use_preprocessing = self.use_preprocessing if use_preprocessing is None else use_preprocessing
 
         try:
             img = cv2.imread(input_path)
             model_input = img
-            if self.use_preprocessing:
+            if effective_use_preprocessing:
                 model_input = self._preprocess_image(img, results_base_folder)
             else:
                 cv2.imwrite(str(results_base_folder / "debug_preprocessed.png"), img)

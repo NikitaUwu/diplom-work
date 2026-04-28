@@ -91,7 +91,7 @@ def _get_models() -> tuple[LineFormer, ChartDete, OCRModel]:
     return _LINEFORMER, _CHARTDETE, _OCR_MODEL
 
 
-def run_pipeline(input_dir: str, output_dir: str) -> None:
+def run_pipeline(input_dir: str, output_dir: str, lineformer_use_preprocessing: bool | None = None) -> None:
     """
     Run the full chart data extraction pipeline locally.
 
@@ -102,6 +102,7 @@ def run_pipeline(input_dir: str, output_dir: str) -> None:
     logger.info("Running local pipeline...")
     logger.info(f"  Input: {input_dir}")
     logger.info(f"  Output: {output_dir}")
+    logger.info(f"  LineFormer preprocessing: {lineformer_use_preprocessing}")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -118,7 +119,7 @@ def run_pipeline(input_dir: str, output_dir: str) -> None:
     lineformer, chartdete, ocr_model = _get_models()
     for img in input_files:
         img_path = os.path.join(input_dir, img)
-        lineformer.inference(img_path, output_dir)
+        lineformer.inference(img_path, output_dir, use_preprocessing=lineformer_use_preprocessing)
 
     logger.info("Detecting chart elements using ChartDete...")
     chartdete.inference(input_dir, output_dir)

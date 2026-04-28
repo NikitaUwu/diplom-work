@@ -16,6 +16,7 @@ def extract(
     input_dir: str = "input",
     output_dir: str = "output",
     backend: str = "local",
+    lineformer_use_preprocessing: bool | None = None,
 ):
     if backend != "local":
         raise ValueError('Only backend="local" is supported in the current project setup.')
@@ -28,4 +29,4 @@ def extract(
 
     logger.info("Running plextract locally...")
     from .local import run_pipeline
-    run_pipeline(input_dir, output_dir)
+    run_pipeline(input_dir, output_dir, lineformer_use_preprocessing=lineformer_use_preprocessing)

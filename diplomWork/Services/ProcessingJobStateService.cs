@@ -136,7 +136,8 @@ public sealed class ProcessingJobStateService
                 return;
             }
 
-            if (string.Equals(job.Status, "error", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(job.Status, "error", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(job.ErrorCode, ProcessingErrorCatalog.Codes.ProcessingLeaseExpired, StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogWarning("Ignoring completed event for job {JobId} because it is already marked as error.", job.Id);
                 return;

@@ -3,9 +3,13 @@ using DiplomWork.Data;
 using DiplomWork.Dtos;
 using DiplomWork.Middleware;
 using DiplomWork.Services;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
+using Microsoft.OpenApi.Models;
+using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -35,7 +39,58 @@ builder.Services
     });
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "API DiplomWork",
+        Version = "v1",
+        Description = "API для загрузки графиков, извлечения данных, редактирования результатов, экспорта и работы с кубическими сплайнами.",
+    });
+    options.SupportNonNullableReferenceTypes();
+    options.OrderActionsBy(api => $"{api.ActionDescriptor.RouteValues["controller"]}_{api.RelativePath}");
+    options.TagActionsBy(api =>
+    {
+        var endpointTags = api.ActionDescriptor.EndpointMetadata
+            .OfType<ITagsMetadata>()
+            .SelectMany(metadata => metadata.Tags)
+            .Where(tag => !string.IsNullOrWhiteSpace(tag))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (endpointTags.Length > 0)
+        {
+            return endpointTags;
+        }
+
+        var controller = api.ActionDescriptor.RouteValues.TryGetValue("controller", out var controllerName)
+            ? controllerName
+            : null;
+        return controller switch
+        {
+            "Auth" => ["Аутентификация"],
+            "AdminUsers" => ["Администрирование пользователей"],
+            "Charts" => ["Графики"],
+            _ => [controller ?? "API"],
+        };
+    });
+    options.MapType<JsonObject>(() => new OpenApiSchema
+    {
+        Type = "object",
+        AdditionalPropertiesAllowed = true,
+    });
+    options.MapType<JsonNode>(() => new OpenApiSchema
+    {
+        Type = "object",
+        AdditionalPropertiesAllowed = true,
+    });
+
+    var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    if (File.Exists(xmlPath))
+    {
+        options.IncludeXmlComments(xmlPath, includeControllerXmlComments: true);
+    }
+});
 builder.Services.AddHttpClient();
 
 builder.Services.AddCors(options =>
@@ -110,29 +165,36 @@ app.UseCors("default");
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(options =>
+    {
+        options.DocumentTitle = "API DiplomWork";
+        options.DefaultModelsExpandDepth(-1);
+        options.DisplayRequestDuration();
+        options.EnableFilter();
+        options.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.List);
+    });
 }
 
-app.MapGet("/health", () => Results.Json(new { status = "ok" }));
+app.MapGet("/health", () => Results.Json(new { status = "ok" })).WithTags("Прочее");
 app.MapGet("/metrics/processing/alerts", async (ProcessingAlertsService alertsService, CancellationToken cancellationToken) =>
-    Results.Json(await alertsService.GetSnapshotAsync(cancellationToken)));
+    Results.Json(await alertsService.GetSnapshotAsync(cancellationToken))).WithTags("Прочее");
 app.MapGet("/metrics/processing", async (ProcessingMetricsService metricsService, CancellationToken cancellationToken) =>
-    Results.Json(await metricsService.GetSnapshotAsync(cancellationToken)));
+    Results.Json(await metricsService.GetSnapshotAsync(cancellationToken))).WithTags("Прочее");
 app.MapGet("/admin/processing/overview", async (HttpContext httpContext, AdminAccessService adminAccessService, ProcessingOverviewService overviewService, CancellationToken cancellationToken) =>
 {
     await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
     return Results.Json(await overviewService.GetSnapshotAsync(cancellationToken));
-});
+}).WithTags("Прочее");
 app.MapGet("/admin/processing/diagnostics", async (HttpContext httpContext, AdminAccessService adminAccessService, ProcessingDiagnosticsService diagnosticsService, CancellationToken cancellationToken) =>
 {
     await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
     return Results.Json(await diagnosticsService.GetSnapshotAsync(cancellationToken));
-});
+}).WithTags("Прочее");
 app.MapGet("/admin/processing/dashboard", async (HttpContext httpContext, AdminAccessService adminAccessService, ProcessingDashboardPageService dashboardPageService, CancellationToken cancellationToken) =>
 {
     await adminAccessService.RequireAdminAsync(httpContext, cancellationToken);
     return Results.Content(dashboardPageService.Render(), "text/html; charset=utf-8");
-});
+}).WithTags("Прочее");
 app.MapControllers();
 
 app.Run();

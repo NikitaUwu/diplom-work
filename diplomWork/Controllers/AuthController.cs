@@ -5,6 +5,9 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace DiplomWork.Controllers;
 
+/// <summary>
+/// Методы аутентификации для регистрации, входа и получения текущего пользователя.
+/// </summary>
 [ApiController]
 [Route("api/v1/auth")]
 public sealed class AuthController : ControllerBase
@@ -20,15 +23,27 @@ public sealed class AuthController : ControllerBase
         _currentUserService = currentUserService;
     }
 
+    /// <summary>
+    /// Регистрирует новую учётную запись пользователя.
+    /// </summary>
     [HttpPost("register")]
     [ProducesResponseType(typeof(UserReadResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<UserReadResponse>> Register([FromBody] RegisterRequest request, CancellationToken cancellationToken)
     {
         var user = await _authService.RegisterAsync(request, cancellationToken);
         return StatusCode(StatusCodes.Status201Created, user);
     }
 
+    /// <summary>
+    /// Выполняет вход пользователя и возвращает токен доступа.
+    /// </summary>
     [HttpPost("login")]
+    [ProducesResponseType(typeof(TokenResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<TokenResponse>> Login([FromBody] LoginRequest request, CancellationToken cancellationToken)
     {
         var token = await _authService.LoginAsync(request, cancellationToken);
@@ -43,14 +58,24 @@ public sealed class AuthController : ControllerBase
         return token;
     }
 
+    /// <summary>
+    /// Удаляет cookie аутентификации для текущего клиента.
+    /// </summary>
     [HttpPost("logout")]
-    public ActionResult<object> Logout()
+    [ProducesResponseType(typeof(OperationStatusResponse), StatusCodes.Status200OK)]
+    public ActionResult<OperationStatusResponse> Logout()
     {
         Response.Cookies.Delete(_options.AuthCookieName, new CookieOptions { Path = "/" });
-        return new { ok = true };
+        return new OperationStatusResponse { Ok = true };
     }
 
+    /// <summary>
+    /// Возвращает текущего аутентифицированного пользователя.
+    /// </summary>
     [HttpGet("me")]
+    [ProducesResponseType(typeof(UserReadResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status500InternalServerError)]
     public async Task<ActionResult<UserReadResponse>> Me(CancellationToken cancellationToken)
     {
         var user = await _currentUserService.RequireCurrentUserAsync(HttpContext, cancellationToken);

@@ -169,6 +169,60 @@ public sealed class ProcessingJobStateServiceTests
     }
 
     [Fact]
+    public async Task ApplyCompletedAsync_AppliesCurrentAttemptAfterLeaseExpired()
+    {
+        await using var db = CreateDbContext();
+        var chart = await SeedChartAsync(db, status: "error");
+        var job = await SeedJobAsync(
+            db,
+            chart.Id,
+            status: "error",
+            messageId: "request-expired",
+            workerId: "worker-a",
+            attempt: 3,
+            startedAt: DateTimeOffset.UtcNow.AddMinutes(-2),
+            lastHeartbeatAt: DateTimeOffset.UtcNow.AddMinutes(-1),
+            leasedUntil: null,
+            errorCode: "processing_lease_expired");
+        var service = CreateService(db, leaseSeconds: 45);
+
+        var resultJson = new JsonObject
+        {
+            ["panels"] = new JsonArray(),
+        };
+
+        var payload = new ProcessingEventPayload
+        {
+            MessageId = "completed-after-expired",
+            RequestMessageId = "request-expired",
+            JobId = job.Id,
+            ChartId = chart.Id,
+            WorkerId = "worker-a",
+            ResultJson = resultJson,
+            NPanels = 0,
+            NSeries = 0,
+        };
+
+        var applied = await service.ApplyCompletedAsync(
+            "charts/process/completed",
+            payload,
+            ToJsonNode(payload),
+            CancellationToken.None);
+
+        var actualJob = await db.ProcessingJobs.SingleAsync();
+        var actualChart = await db.Charts.SingleAsync();
+
+        Assert.True(applied);
+        Assert.Equal("done", actualJob.Status);
+        Assert.Null(actualJob.ErrorCode);
+        Assert.Null(actualJob.ErrorMessage);
+        Assert.Equal("done", actualChart.Status);
+        Assert.Null(actualChart.ErrorMessage);
+        Assert.NotNull(actualChart.ResultJson);
+        Assert.Single(db.MqttMessages.Where(item => item.Direction == "in"));
+    }
+
+    [Fact]
     public async Task ApplyCompletedAsync_LoadsResultJsonFromStorage_WhenPayloadContainsPath()
     {
         await using var db = CreateDbContext();
@@ -619,7 +673,8 @@ public sealed class ProcessingJobStateServiceTests
         DateTimeOffset? startedAt = null,
         DateTimeOffset? lastHeartbeatAt = null,
         DateTimeOffset? leasedUntil = null,
-        DateTimeOffset? nextRetryAt = null)
+        DateTimeOffset? nextRetryAt = null,
+        string? errorCode = null)
     {
         var job = new ProcessingJob
         {
@@ -633,6 +688,7 @@ public sealed class ProcessingJobStateServiceTests
             LastHeartbeatAt = lastHeartbeatAt,
             LeasedUntil = leasedUntil,
             NextRetryAt = nextRetryAt,
+            ErrorCode = errorCode,
             RequestPayload = JsonDocument.Parse(
                 $$"""
                 {

@@ -52,3 +52,7 @@ infra/mosquitto/log/*
 !infra/mosquitto/data/.gitkeep
 !infra/mosquitto/log/.gitkeep
 ml-worker/extract-line-chart-data.zip
+
+ml-worker/iter_1800.pth
+ml-worker/weight/*
+!ml-worker/weight/README.md

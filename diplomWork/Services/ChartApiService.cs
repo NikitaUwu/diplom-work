@@ -15,6 +15,7 @@ public sealed class ChartApiService
     private readonly AppDbContext _db;
     private readonly AppOptions _options;
     private readonly ChartStorageService _storageService;
+    private readonly SplineService _splineService;
     private readonly ChartEditorService _chartEditorService;
     private readonly CubicSelectionService _cubicSelectionService;
     private readonly ExportService _exportService;
@@ -24,6 +25,7 @@ public sealed class ChartApiService
         AppDbContext db,
         AppOptions options,
         ChartStorageService storageService,
+        SplineService splineService,
         ChartEditorService chartEditorService,
         CubicSelectionService cubicSelectionService,
         ExportService exportService,
@@ -32,6 +34,7 @@ public sealed class ChartApiService
         _db = db;
         _options = options;
         _storageService = storageService;
+        _splineService = splineService;
         _chartEditorService = chartEditorService;
         _cubicSelectionService = cubicSelectionService;
         _exportService = exportService;
@@ -44,7 +47,7 @@ public sealed class ChartApiService
         return chart ?? throw new ApiProblemException(StatusCodes.Status404NotFound, "Chart not found");
     }
 
-    public async Task<List<ChartResponse>> ListChartsAsync(int userId, CancellationToken cancellationToken = default)
+    public async Task<List<ChartDetailsResponse>> ListChartsAsync(int userId, CancellationToken cancellationToken = default)
     {
         var charts = await _db.Charts
             .Where(item => item.UserId == userId)
@@ -54,7 +57,11 @@ public sealed class ChartApiService
         return charts.Select(chart => ToChartResponse(chart)).ToList();
     }
 
-    public async Task<ChartResponse> UploadAndEnqueueAsync(int userId, IFormFile upload, CancellationToken cancellationToken = default)
+    public async Task<ChartDetailsResponse> UploadAndEnqueueAsync(
+        int userId,
+        IFormFile upload,
+        bool lineformerUsePreprocessing = true,
+        CancellationToken cancellationToken = default)
     {
         await using var input = upload.OpenReadStream();
         using var buffer = new MemoryStream();
@@ -104,7 +111,7 @@ public sealed class ChartApiService
 
             chart.OriginalPath = ToStorageRelativePath(originalPath);
             chart.Status = ChartStatus.uploaded.ToString();
-            var processingJob = await CreateProcessingJobAsync(chart, cancellationToken);
+            var processingJob = await CreateProcessingJobAsync(chart, lineformerUsePreprocessing, cancellationToken);
             await EnqueueProcessRequestAsync(processingJob, cancellationToken);
             return ToChartResponse(chart);
         }
@@ -134,9 +141,9 @@ public sealed class ChartApiService
         }
     }
 
-    public ChartResponse ToChartResponse(Chart chart, JsonNode? resultJson = null)
+    public ChartDetailsResponse ToChartResponse(Chart chart, JsonNode? resultJson = null)
     {
-        return new ChartResponse
+        return new ChartDetailsResponse
         {
             Id = chart.Id,
             Status = ParseStatus(chart.Status),
@@ -151,7 +158,7 @@ public sealed class ChartApiService
         };
     }
 
-    public ChartResponse PreparedChartResponse(Chart chart)
+    public ChartDetailsResponse PreparedChartResponse(Chart chart)
     {
         var resultJson = JsonHelpers.FromDocument(chart.ResultJson);
         if (chart.Status == ChartStatus.done.ToString() && resultJson is JsonObject resultObject)
@@ -279,26 +286,169 @@ public sealed class ChartApiService
     public Task WriteDataJsonAsync(Chart chart, JsonObject resultJson, CancellationToken cancellationToken = default) =>
         _storageService.WriteDataJsonAsync(chart, resultJson, cancellationToken);
 
-    public JsonObject PreviewWithSelectedCubicPoints(int chartId, JsonObject baseResultJson, int totalPoints)
+    public JsonObject PreviewWithSplineControlPoints(
+        int chartId,
+        JsonObject baseResultJson,
+        SplineControlPointMode controlPointMode,
+        int totalPoints)
     {
         var aligned = _editorOverlayService.EnsureEditorAlignment(chartId, baseResultJson);
         var panels = ParsePanels(aligned, StatusCodes.Status409Conflict, StatusCodes.Status500InternalServerError, "Export is not available yet", "Invalid panels format in result_json");
-        var prepared = _chartEditorService.BuildEditorResultJson(
-            aligned,
-            panels,
-            points => _cubicSelectionService.SelectCubicSplinePoints(points, totalPoints));
+        Func<List<(double X, double Y)>, List<(double X, double Y)>>? pointTransform = controlPointMode == SplineControlPointMode.original
+            ? null
+            : points => SelectSplineControlPoints(points, controlPointMode, totalPoints);
+        var prepared = _chartEditorService.BuildEditorResultJson(aligned, panels, pointTransform);
         return _editorOverlayService.EnsureEditorAlignment(chartId, prepared);
+    }
+
+    public JsonObject PreviewWithSelectedCubicPoints(int chartId, JsonObject baseResultJson, int totalPoints)
+    {
+        return PreviewWithSplineControlPoints(chartId, baseResultJson, SplineControlPointMode.selected, totalPoints);
     }
 
     public JsonObject PreviewWithRandomCubicPoints(int chartId, JsonObject baseResultJson, int totalPoints)
     {
+        return PreviewWithSplineControlPoints(chartId, baseResultJson, SplineControlPointMode.auto, totalPoints);
+    }
+
+    public ChartSplineCurvesResponse BuildSplineCurvePointsResponse(
+        int chartId,
+        JsonObject baseResultJson,
+        SplineControlPointMode controlPointMode,
+        int? totalControlPoints,
+        int samplesPerSeries)
+    {
         var aligned = _editorOverlayService.EnsureEditorAlignment(chartId, baseResultJson);
         var panels = ParsePanels(aligned, StatusCodes.Status409Conflict, StatusCodes.Status500InternalServerError, "Export is not available yet", "Invalid panels format in result_json");
-        var prepared = _chartEditorService.BuildEditorResultJson(
-            aligned,
-            panels,
-            points => _cubicSelectionService.SelectAutoCubicSplinePoints(points, totalPoints));
-        return _editorOverlayService.EnsureEditorAlignment(chartId, prepared);
+        var response = new ChartSplineCurvesResponse
+        {
+            ChartId = chartId,
+            ControlPointMode = controlPointMode,
+            SamplesPerSeries = Math.Max(2, samplesPerSeries),
+        };
+
+        foreach (var panel in panels)
+        {
+            var panelResponse = new ChartSplinePanelResponse
+            {
+                Id = panel.Id,
+                XUnit = panel.XUnit,
+                YUnit = panel.YUnit,
+            };
+
+            foreach (var series in panel.Series)
+            {
+                var sourcePoints = series.Points.ToList();
+                var controlPoints = SelectSplineControlPoints(sourcePoints, controlPointMode, totalControlPoints);
+                var curvePoints = _splineService.SampleCubicSpline(controlPoints, response.SamplesPerSeries);
+                panelResponse.Series.Add(new ChartSplineSeriesResponse
+                {
+                    Id = series.Id,
+                    Name = series.Name,
+                    SourcePoints = sourcePoints.Select(ToPointResponse).ToList(),
+                    ControlPoints = controlPoints.Select(ToPointResponse).ToList(),
+                    CurvePoints = curvePoints.Select(ToPointResponse).ToList(),
+                });
+            }
+
+            response.Panels.Add(panelResponse);
+        }
+
+        return response;
+    }
+
+    public ChartSplineCurvesResponse? TryBuildStoredAutoSplineCurvePointsResponse(
+        int chartId,
+        JsonObject persistedResultJson,
+        int? requestedTotalControlPoints,
+        int samplesPerSeries)
+    {
+        var aligned = _editorOverlayService.EnsureEditorAlignment(chartId, persistedResultJson);
+        var autoSpline = aligned["auto_spline"] as JsonObject;
+        if (autoSpline is null || autoSpline["panels"] is not JsonArray autoPanels || autoPanels.Count == 0)
+        {
+            return null;
+        }
+
+        if (JsonHelpers.TryGetInt(autoSpline["selected_point_count"], out var storedSelectedPointCount) &&
+            requestedTotalControlPoints.HasValue &&
+            requestedTotalControlPoints.Value > 0 &&
+            requestedTotalControlPoints.Value != storedSelectedPointCount)
+        {
+            return null;
+        }
+
+        var basePanels = ParsePanels(aligned, StatusCodes.Status409Conflict, StatusCodes.Status500InternalServerError, "Export is not available yet", "Invalid panels format in result_json");
+        var baseSeriesById = basePanels
+            .SelectMany(panel => panel.Series.Select(series => (Panel: panel, Series: series)))
+            .ToDictionary(item => item.Series.Id, item => item, StringComparer.Ordinal);
+        var response = new ChartSplineCurvesResponse
+        {
+            ChartId = chartId,
+            ControlPointMode = SplineControlPointMode.auto,
+            SamplesPerSeries = Math.Max(2, samplesPerSeries),
+        };
+
+        foreach (var autoPanelNode in autoPanels)
+        {
+            if (autoPanelNode is not JsonObject autoPanelObject)
+            {
+                return null;
+            }
+
+            var panelId = JsonHelpers.GetString(autoPanelObject["id"]);
+            if (string.IsNullOrWhiteSpace(panelId) || autoPanelObject["series"] is not JsonArray autoSeriesArray)
+            {
+                return null;
+            }
+
+            var panelResponse = new ChartSplinePanelResponse
+            {
+                Id = panelId,
+                XUnit = basePanels.FirstOrDefault(panel => string.Equals(panel.Id, panelId, StringComparison.Ordinal))?.XUnit,
+                YUnit = basePanels.FirstOrDefault(panel => string.Equals(panel.Id, panelId, StringComparison.Ordinal))?.YUnit,
+            };
+
+            foreach (var autoSeriesNode in autoSeriesArray)
+            {
+                if (autoSeriesNode is not JsonObject autoSeriesObject)
+                {
+                    return null;
+                }
+
+                var controlPoints = ParsePointList(autoSeriesObject["points"], StatusCodes.Status500InternalServerError, "Invalid auto_spline points format");
+                if (controlPoints.Count == 0)
+                {
+                    return null;
+                }
+
+                var storedCurvePoints = autoSeriesObject["curve_points"] is null
+                    ? []
+                    : ParsePointList(autoSeriesObject["curve_points"], StatusCodes.Status500InternalServerError, "Invalid auto_spline curve_points format");
+                var sourceSeriesId = JsonHelpers.GetString(autoSeriesObject["source_series_id"])
+                    ?? JsonHelpers.GetString(autoSeriesObject["id"]);
+                baseSeriesById.TryGetValue(sourceSeriesId ?? string.Empty, out var baseSeries);
+                var curvePointResponses = storedCurvePoints.Count == response.SamplesPerSeries
+                    ? storedCurvePoints.Select(ToPointResponse).ToList()
+                    : _splineService.SampleCubicSpline(controlPoints, response.SamplesPerSeries)
+                        .Select(point => ToPointResponse((point[0], point[1])))
+                        .ToList();
+                panelResponse.Series.Add(new ChartSplineSeriesResponse
+                {
+                    Id = sourceSeriesId ?? string.Empty,
+                    Name = JsonHelpers.GetString(autoSeriesObject["source_name"])
+                        ?? baseSeries.Series?.Name
+                        ?? JsonHelpers.GetString(autoSeriesObject["name"]),
+                    SourcePoints = (baseSeries.Series?.Points ?? controlPoints).Select(ToPointResponse).ToList(),
+                    ControlPoints = controlPoints.Select(ToPointResponse).ToList(),
+                    CurvePoints = curvePointResponses,
+                });
+            }
+
+            response.Panels.Add(panelResponse);
+        }
+
+        return response;
     }
 
     public List<PanelData> ParsePanels(
@@ -367,7 +517,20 @@ public sealed class ChartApiService
             throw new ApiProblemException(invalidStatus, invalidDetail);
         }
 
-        if (seriesObject["points"] is not JsonArray pointsArray)
+        var points = ParsePointList(seriesObject["points"], invalidStatus, invalidDetail);
+
+        return new SeriesData
+        {
+            Id = id,
+            Name = JsonHelpers.GetString(seriesObject["name"]),
+            Style = seriesObject["style"]?.DeepClone(),
+            Points = points,
+        };
+    }
+
+    private static List<(double X, double Y)> ParsePointList(JsonNode? pointsNode, int invalidStatus, string invalidDetail)
+    {
+        if (pointsNode is not JsonArray pointsArray)
         {
             throw new ApiProblemException(invalidStatus, invalidDetail);
         }
@@ -386,13 +549,7 @@ public sealed class ChartApiService
             points.Add((x, y));
         }
 
-        return new SeriesData
-        {
-            Id = id,
-            Name = JsonHelpers.GetString(seriesObject["name"]),
-            Style = seriesObject["style"]?.DeepClone(),
-            Points = points,
-        };
+        return points;
     }
 
     private static ChartStatus ParseStatus(string rawStatus)
@@ -449,7 +606,44 @@ public sealed class ChartApiService
         return string.IsNullOrWhiteSpace(cleaned) ? "upload.bin" : cleaned[..Math.Min(cleaned.Length, 200)];
     }
 
-    private async Task<ProcessingJob> CreateProcessingJobAsync(Chart chart, CancellationToken cancellationToken)
+    private List<(double X, double Y)> SelectSplineControlPoints(
+        IEnumerable<(double X, double Y)> points,
+        SplineControlPointMode controlPointMode,
+        int? totalControlPoints)
+    {
+        var normalizedPoints = points.ToList();
+        var requestedPoints = Math.Max(2, totalControlPoints ?? 3);
+        return controlPointMode switch
+        {
+            SplineControlPointMode.original => normalizedPoints,
+            SplineControlPointMode.selected => _cubicSelectionService.SelectCubicSplinePoints(normalizedPoints, requestedPoints),
+            SplineControlPointMode.auto => _cubicSelectionService.SelectAutoCubicSplinePoints(normalizedPoints, requestedPoints),
+            _ => normalizedPoints,
+        };
+    }
+
+    private static ChartPointResponse ToPointResponse((double X, double Y) point)
+    {
+        return new ChartPointResponse
+        {
+            X = point.X,
+            Y = point.Y,
+        };
+    }
+
+    private static ChartPointResponse ToPointResponse(IReadOnlyList<double> point)
+    {
+        return new ChartPointResponse
+        {
+            X = point.Count > 0 ? point[0] : 0d,
+            Y = point.Count > 1 ? point[1] : 0d,
+        };
+    }
+
+    private async Task<ProcessingJob> CreateProcessingJobAsync(
+        Chart chart,
+        bool lineformerUsePreprocessing,
+        CancellationToken cancellationToken)
     {
         var messageId = Guid.NewGuid().ToString("N");
         var payload = new JsonObject
@@ -461,6 +655,7 @@ public sealed class ChartApiService
             ["userId"] = chart.UserId,
             ["originalPath"] = chart.OriginalPath,
             ["storageRoot"] = _storageService.StorageRoot,
+            ["lineformerUsePreprocessing"] = lineformerUsePreprocessing,
         };
 
         var processingJob = new ProcessingJob

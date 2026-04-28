@@ -10,20 +10,6 @@ function apiUrl(path: string): string {
   return `${BASE_URL}${path}`;
 }
 
-function withQuery(path: string, params: Record<string, string | number | boolean | null | undefined>): string {
-  const query = new URLSearchParams();
-
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === '') {
-      return;
-    }
-    query.set(key, String(value));
-  });
-
-  const suffix = query.toString();
-  return suffix ? `${path}?${suffix}` : path;
-}
-
 export type ChartStatus = 'uploaded' | 'processing' | 'done' | 'error';
 
 export interface ChartCreateResponse {
@@ -160,12 +146,13 @@ export async function clearToken(): Promise<void> {
   await logout();
 }
 
-export async function uploadChart(file: File): Promise<ChartCreateResponse> {
+export async function uploadChart(file: File, lineformerUsePreprocessing = true): Promise<ChartCreateResponse> {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('lineformerUsePreprocessing', String(lineformerUsePreprocessing));
 
   return apiFetchJson<ChartCreateResponse>(
-    '/charts/upload',
+    '/charts',
     {
       method: 'POST',
       body: formData,
@@ -195,11 +182,11 @@ async function patchChartResult(
   resultJson: unknown,
   persist: boolean,
 ): Promise<ChartCreateResponse> {
-  const path = withQuery(`/charts/${chartId}`, { persist });
+  const path = persist ? `/charts/${chartId}/result` : `/charts/${chartId}/result/preview`;
   return apiFetchJson<ChartCreateResponse>(
     path,
     {
-      method: 'PATCH',
+      method: persist ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resultJson }),
     },
@@ -221,18 +208,18 @@ export async function saveChartResult(
   return patchChartResult(chartId, resultJson, true);
 }
 
-export async function previewChartRandomSplinePoints(
+export async function previewChartAutoSplinePoints(
   chartId: number,
   totalPoints: number,
   resultJson?: unknown,
 ): Promise<ChartCreateResponse> {
   return apiFetchJson<ChartCreateResponse>(
-    `/charts/${chartId}/cubic-preview-random`,
+    `/charts/${chartId}/spline/preview`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ totalPoints, resultJson }),
+      body: JSON.stringify({ totalPoints, controlPointMode: 'auto', resultJson }),
     },
-    'Предпросмотр случайного кубического сплайна по точкам',
+    'Предпросмотр кубического сплайна по автоматически выбранным точкам',
   );
 }

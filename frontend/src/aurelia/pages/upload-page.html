@@ -44,6 +44,20 @@
           accept="image/*"
           change.trigger="onFileSelected($event)">
 
+        <label class="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200">
+          <input
+            type="checkbox"
+            checked.bind="lineformerUsePreprocessing"
+            disabled.bind="isUploading"
+            class="mt-1 h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500 dark:border-slate-700">
+          <span>
+            <span class="block font-medium text-slate-900 dark:text-slate-100">Предобработка LineFormer</span>
+            <span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">
+              Если выключить, LineFormer получит исходное изображение без очистки сетки и контраста.
+            </span>
+          </span>
+        </label>
+
         <div class="mt-5 flex flex-wrap gap-3">
           <button
             type="button"
