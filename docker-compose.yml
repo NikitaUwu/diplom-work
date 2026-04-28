@@ -35,6 +35,12 @@ services:
       DATABASE_URL: Host=db;Port=5432;Database=plextract_db;Username=admin;Password=password
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
+      Logging__LogLevel__Default: Information
+      Logging__LogLevel__Microsoft: Warning
+      Logging__LogLevel__Microsoft.AspNetCore: Warning
+      Logging__LogLevel__Microsoft.EntityFrameworkCore: Warning
+      Logging__LogLevel__Npgsql: Warning
+      Logging__LogLevel__System: Warning
       AUTH_ENABLED: "false"
       JWT_SECRET_KEY: 1234567890qwertyuiopasdfghjklzxcvbnm1234567890
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "60"
@@ -42,7 +48,7 @@ services:
       CORS_ORIGINS: http://localhost,http://localhost:80,http://localhost:5173,http://frontend
       STORAGE_DIR: /app/storage
       WORKER_RUNS_ROOT: /app/runs/worker
-      MQTT_ENABLED: "false"
+      MQTT_ENABLED: "true"
       MQTT_HOST: mqtt
       MQTT_PORT: "1883"
     volumes:
@@ -79,7 +85,7 @@ services:
       PYTHONUNBUFFERED: "1"
       STORAGE_DIR: /app/storage
       WORK_DIR: /app/runs/worker
-      MQTT_ENABLED: "false"
+      MQTT_ENABLED: "true"
       MQTT_BROKER: mqtt
       MQTT_PORT: "1883"
       MQTT_STATUS_QOS: "1"

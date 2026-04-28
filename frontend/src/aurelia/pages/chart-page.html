@@ -35,8 +35,17 @@
       ${pollError}
     </div>
 
+    <div if.bind="showDebugProcessingTimer" class="mt-6 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800 dark:border-sky-900/40 dark:bg-sky-950/40 dark:text-sky-200">
+      DEBUG: upload -> output data: <span class="font-semibold">${debugProcessingElapsedText}</span>
+      <span if.bind="debugProcessingFilename">(${debugProcessingFilename})</span>
+    </div>
+
     <div if.bind="chart?.status === 'error' && chart?.errorMessage" class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300">
       ${chart.errorMessage}
+    </div>
+
+    <div if.bind="editorDataError" class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/40 dark:text-rose-300">
+      ${editorDataError}
     </div>
 
     <div class="mt-6 space-y-6">

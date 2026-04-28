@@ -12,6 +12,13 @@ namespace DiplomWork.Services;
 
 public sealed class ChartApiService
 {
+    private static readonly (string Key, string DirectoryName, string SearchPattern)[] KnownArtifactFiles =
+    [
+        ("lineformer_prediction", "lineformer", "prediction.png"),
+        ("converted_plot", "converted_datapoints", "plot.png"),
+        ("chartdete_predictions", "chartdete", "predictions.*"),
+    ];
+
     private readonly AppDbContext _db;
     private readonly AppOptions _options;
     private readonly ChartStorageService _storageService;
@@ -20,6 +27,7 @@ public sealed class ChartApiService
     private readonly CubicSelectionService _cubicSelectionService;
     private readonly ExportService _exportService;
     private readonly EditorOverlayService _editorOverlayService;
+    private readonly MqttOutboxSignal _outboxSignal;
 
     public ChartApiService(
         AppDbContext db,
@@ -29,7 +37,8 @@ public sealed class ChartApiService
         ChartEditorService chartEditorService,
         CubicSelectionService cubicSelectionService,
         ExportService exportService,
-        EditorOverlayService editorOverlayService)
+        EditorOverlayService editorOverlayService,
+        MqttOutboxSignal outboxSignal)
     {
         _db = db;
         _options = options;
@@ -39,6 +48,7 @@ public sealed class ChartApiService
         _cubicSelectionService = cubicSelectionService;
         _exportService = exportService;
         _editorOverlayService = editorOverlayService;
+        _outboxSignal = outboxSignal;
     }
 
     public async Task<Chart> GetUserChartOrThrowAsync(int chartId, int userId, CancellationToken cancellationToken = default)
@@ -143,6 +153,8 @@ public sealed class ChartApiService
 
     public ChartDetailsResponse ToChartResponse(Chart chart, JsonNode? resultJson = null)
     {
+        var responseResultJson = WithAvailableArtifacts(chart, resultJson ?? JsonHelpers.FromDocument(chart.ResultJson));
+
         return new ChartDetailsResponse
         {
             Id = chart.Id,
@@ -153,7 +165,7 @@ public sealed class ChartApiService
             ProcessedAt = chart.ProcessedAt,
             NPanels = chart.NPanels,
             NSeries = chart.NSeries,
-            ResultJson = resultJson ?? JsonHelpers.FromDocument(chart.ResultJson),
+            ResultJson = responseResultJson,
             ErrorMessage = chart.ErrorMessage,
         };
     }
@@ -209,7 +221,7 @@ public sealed class ChartApiService
 
         var payload = JsonHelpers.FromDocument(chart.ResultJson) as JsonObject;
         var artifacts = payload?["artifacts"] as JsonObject;
-        var rawPath = JsonHelpers.GetString(artifacts?[fileKey]);
+        var rawPath = JsonHelpers.GetString(artifacts?[fileKey]) ?? TryFindAvailableArtifactRawPath(chart, fileKey);
         if (rawPath is null)
         {
             throw new ApiProblemException(StatusCodes.Status404NotFound, "File not found");
@@ -594,6 +606,77 @@ public sealed class ChartApiService
             .Replace('\\', '/');
     }
 
+    private JsonNode? WithAvailableArtifacts(Chart chart, JsonNode? resultJson)
+    {
+        var availableArtifacts = DiscoverAvailableArtifacts(chart);
+        if (availableArtifacts.Count == 0)
+        {
+            return resultJson;
+        }
+
+        var resultObject = resultJson as JsonObject ?? new JsonObject();
+        if (resultObject["artifacts"] is not JsonObject artifacts)
+        {
+            artifacts = new JsonObject();
+            resultObject["artifacts"] = artifacts;
+        }
+
+        foreach (var (key, rawPath) in availableArtifacts)
+        {
+            if (JsonHelpers.GetString(artifacts[key]) is null)
+            {
+                artifacts[key] = rawPath;
+            }
+        }
+
+        return resultObject;
+    }
+
+    private Dictionary<string, string> DiscoverAvailableArtifacts(Chart chart)
+    {
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal);
+        string chartDirectory;
+        try
+        {
+            chartDirectory = _storageService.GetChartDirectoryFromChart(chart);
+        }
+        catch (ApiProblemException)
+        {
+            return artifacts;
+        }
+
+        foreach (var (key, directoryName, searchPattern) in KnownArtifactFiles)
+        {
+            var artifactDirectory = Path.Combine(chartDirectory, directoryName);
+            if (!Directory.Exists(artifactDirectory))
+            {
+                continue;
+            }
+
+            var filePath = Directory.EnumerateFiles(artifactDirectory, searchPattern)
+                .Order(StringComparer.Ordinal)
+                .FirstOrDefault();
+            if (filePath is not null)
+            {
+                artifacts[key] = ToStorageRelativePath(filePath);
+            }
+        }
+
+        if (artifacts.TryGetValue("converted_plot", out var convertedPlot))
+        {
+            artifacts.TryAdd("restored_plot", convertedPlot);
+        }
+
+        return artifacts;
+    }
+
+    private string? TryFindAvailableArtifactRawPath(Chart chart, string fileKey)
+    {
+        return DiscoverAvailableArtifacts(chart).TryGetValue(fileKey, out var rawPath)
+            ? rawPath
+            : null;
+    }
+
     private static string SafeFilename(string? fileName)
     {
         var source = string.IsNullOrWhiteSpace(fileName) ? "upload.bin" : fileName;
@@ -701,5 +784,6 @@ public sealed class ChartApiService
 
         _db.MqttMessages.Add(outboxMessage);
         await _db.SaveChangesAsync(cancellationToken);
+        _outboxSignal.Notify();
     }
 }

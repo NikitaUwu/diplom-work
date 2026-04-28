@@ -1,7 +1,8 @@
 import template from './upload-page.html?raw';
 import { getChart, uploadChart, type ChartCreateResponse } from '../../api/client';
+import { clearActiveProcessingTimer, finishProcessingTimer, startProcessingTimer } from '../debug/upload-processing-timer';
 import { navigateTo } from '../navigation';
-import { chartStatusBadgeClass, chartStatusLabel, hasRenderableEditorResult } from '../shared/chart-utils';
+import { chartStatusBadgeClass, chartStatusLabel } from '../shared/chart-utils';
 import { sessionState } from '../state/session-state';
 
 export class UploadPage {
@@ -69,12 +70,14 @@ export class UploadPage {
     this.chart = null;
     this.error = '';
     this.isUploading = true;
+    startProcessingTimer(this.file);
 
     try {
       const response = await uploadChart(this.file, this.lineformerUsePreprocessing);
       this.chart = response;
       this.startPolling(response.id);
     } catch (error) {
+      clearActiveProcessingTimer();
       this.error = error instanceof Error ? error.message : 'Ошибка загрузки';
     } finally {
       this.isUploading = false;
@@ -86,6 +89,7 @@ export class UploadPage {
     this.chart = null;
     this.error = '';
     this.file = null;
+    clearActiveProcessingTimer();
     this.revokePreview();
   }
 
@@ -99,12 +103,14 @@ export class UploadPage {
 
         if (fresh.status === 'error') {
           this.stopPolling();
+          finishProcessingTimer(chartId);
           navigateTo(`/charts/${chartId}`);
           return;
         }
 
-        if (fresh.status === 'done' && hasRenderableEditorResult(fresh.resultJson)) {
+        if (fresh.status === 'done') {
           this.stopPolling();
+          finishProcessingTimer(chartId);
           navigateTo(`/charts/${chartId}`);
         }
       } catch (error) {

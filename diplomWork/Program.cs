@@ -124,6 +124,7 @@ builder.Services.AddScoped<ProcessingMetricsService>();
 builder.Services.AddScoped<ProcessingDiagnosticsService>();
 builder.Services.AddScoped<ProcessingOverviewService>();
 builder.Services.AddSingleton<ProcessingDashboardPageService>();
+builder.Services.AddSingleton<MqttOutboxSignal>();
 builder.Services.AddSingleton<MqttPublisherService>();
 builder.Services.AddHostedService<MqttOutboxDispatcherService>();
 builder.Services.AddHostedService<MqttProcessingConsumerService>();

@@ -10,17 +10,20 @@ public sealed class MqttOutboxDispatcherService : BackgroundService
     private readonly AppOptions _options;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly MqttPublisherService _mqttPublisherService;
+    private readonly MqttOutboxSignal _outboxSignal;
     private readonly ILogger<MqttOutboxDispatcherService> _logger;
 
     public MqttOutboxDispatcherService(
         AppOptions options,
         IServiceScopeFactory scopeFactory,
         MqttPublisherService mqttPublisherService,
+        MqttOutboxSignal outboxSignal,
         ILogger<MqttOutboxDispatcherService> logger)
     {
         _options = options;
         _scopeFactory = scopeFactory;
         _mqttPublisherService = mqttPublisherService;
+        _outboxSignal = outboxSignal;
         _logger = logger;
     }
 
@@ -39,7 +42,7 @@ public sealed class MqttOutboxDispatcherService : BackgroundService
                 var processed = await DispatchBatchAsync(stoppingToken);
                 if (processed == 0)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+                    await _outboxSignal.WaitAsync(TimeSpan.FromSeconds(2), stoppingToken);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

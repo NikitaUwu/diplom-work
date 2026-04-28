@@ -6,6 +6,7 @@ import {
   saveChartResult,
   type ChartCreateResponse,
 } from '../../api/client';
+import { formatElapsedMs, readProcessingTimerResult } from '../debug/upload-processing-timer';
 import { downloadSeriesCsv, downloadSeriesJson, hasExportableSeries } from '../shared/chart-export';
 import { buildArtifactsCarousel, chartStatusBadgeClass, chartStatusLabel, hasRenderableEditorResult } from '../shared/chart-utils';
 import { sessionState } from '../state/session-state';
@@ -30,6 +31,8 @@ export class ChartPage {
   public saveError = '';
   public saving = false;
   public showOriginalBackdrop = false;
+  public debugProcessingElapsedText = '';
+  public debugProcessingFilename = '';
 
   private pollTimer: number | null = null;
   private pollInFlight = false;
@@ -76,6 +79,8 @@ export class ChartPage {
     this.error = '';
     this.pollError = '';
     this.showOriginalBackdrop = false;
+    this.debugProcessingElapsedText = '';
+    this.debugProcessingFilename = '';
 
     if (!Number.isFinite(this.chartId) || this.chartId <= 0) {
       this.error = 'Некорректный id графика';
@@ -83,6 +88,7 @@ export class ChartPage {
     }
 
     await this.loadOnce();
+    this.loadDebugProcessingTimer();
     this.showAutoSplineInfo = this.hasAutoSplineResult;
     this.startPollingIfNeeded();
   }
@@ -121,7 +127,19 @@ export class ChartPage {
   }
 
   public get isAwaitingEditorData(): boolean {
-    return this.chart?.status === 'done' && !this.hasRenderableServerResult;
+    return false;
+  }
+
+  public get editorDataError(): string {
+    if (this.chart?.status !== 'done' || this.hasRenderableServerResult) {
+      return '';
+    }
+
+    return 'Не удалось построить кривые для редактора: выходные данные не содержат точек для отображения.';
+  }
+
+  public get showDebugProcessingTimer(): boolean {
+    return !!this.debugProcessingElapsedText;
   }
 
   public get serverResultJson(): unknown {
@@ -488,6 +506,7 @@ export class ChartPage {
       this.chart = fresh;
       this.error = '';
       this.pollError = '';
+      this.loadDebugProcessingTimer();
 
       if (fresh.status === 'done' && this.editedResultJson !== null && this.areResultJsonEqual(this.editedResultJson, fresh.resultJson)) {
         this.editedResultJson = null;
@@ -567,7 +586,28 @@ export class ChartPage {
     return !!chart && (
       chart.status === 'processing'
       || chart.status === 'uploaded'
-      || (chart.status === 'done' && !hasRenderableEditorResult(chart.resultJson))
     );
+  }
+
+  private loadDebugProcessingTimer(): void {
+    const timer = readProcessingTimerResult(this.chartId);
+    if (timer) {
+      this.debugProcessingElapsedText = formatElapsedMs(timer.elapsedMs);
+      this.debugProcessingFilename = timer.filename;
+      return;
+    }
+
+    if (!this.chart?.processedAt) {
+      return;
+    }
+
+    const startedAt = Date.parse(this.chart.createdAt);
+    const finishedAt = Date.parse(this.chart.processedAt);
+    if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt) || finishedAt < startedAt) {
+      return;
+    }
+
+    this.debugProcessingElapsedText = formatElapsedMs(finishedAt - startedAt);
+    this.debugProcessingFilename = this.chart.originalFilename;
   }
 }

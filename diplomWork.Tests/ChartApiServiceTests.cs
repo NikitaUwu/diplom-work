@@ -373,6 +373,7 @@ public sealed class ChartApiServiceTests
             var cubicSelectionService = new CubicSelectionService();
             var exportService = new ExportService();
             var editorOverlayService = new EditorOverlayService(Options);
+            var outboxSignal = new MqttOutboxSignal();
 
             Service = new ChartApiService(
                 Db,
@@ -382,7 +383,8 @@ public sealed class ChartApiServiceTests
                 chartEditorService,
                 cubicSelectionService,
                 exportService,
-                editorOverlayService);
+                editorOverlayService,
+                outboxSignal);
         }
 
         public AppOptions Options { get; }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import sys
@@ -18,6 +19,14 @@ import psycopg2
 from dotenv import load_dotenv
 from PIL import Image
 from psycopg2.extras import Json, RealDictCursor
+
+
+class PipelineOutputInvalidError(ValueError):
+    def __init__(self, message: str, partial_result_json: Dict[str, Any]):
+        super().__init__(message)
+        artifacts = partial_result_json.get("artifacts")
+        self.artifacts = dict(artifacts) if isinstance(artifacts, dict) else {}
+
 
 # Keep Windows console output predictable.
 os.environ.setdefault("PYTHONUTF8", "1")
@@ -77,6 +86,7 @@ def _env_flag(name: str, default: bool) -> bool:
 MQTT_ENABLED = _env_flag("MQTT_ENABLED", True)
 MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
+MQTT_REQUEST_TOPIC = os.getenv("MQTT_PROCESS_REQUEST_TOPIC", "charts/process/request")
 MQTT_ACCEPTED_TOPIC = os.getenv("MQTT_PROCESS_ACCEPTED_TOPIC", "charts/process/accepted")
 MQTT_HEARTBEAT_TOPIC = os.getenv("MQTT_PROCESS_HEARTBEAT_TOPIC", "charts/process/heartbeat")
 MQTT_COMPLETED_TOPIC = os.getenv("MQTT_PROCESS_COMPLETED_TOPIC", "charts/process/completed")
@@ -408,11 +418,28 @@ def _publish_processing_event(mqtt_client, topic: str, payload: Dict[str, Any], 
     return False
 
 
+def _ensure_json_finite(value: Any, path: str = "$") -> None:
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"Non-finite numeric value at {path}: {value}")
+        return
+
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            _ensure_json_finite(nested_value, f"{path}.{key}")
+        return
+
+    if isinstance(value, list):
+        for index, nested_value in enumerate(value):
+            _ensure_json_finite(nested_value, f"{path}[{index}]")
+
+
 def _write_result_json_to_storage(result_json: Dict[str, Any], src_file: Path, storage_dir: Path) -> str:
+    _ensure_json_finite(result_json)
     result_path = src_file.parent / "data.json"
     result_path.parent.mkdir(parents=True, exist_ok=True)
     with result_path.open("w", encoding="utf-8") as f:
-        json.dump(result_json, f, ensure_ascii=False, indent=2)
+        json.dump(result_json, f, ensure_ascii=False, indent=2, allow_nan=False)
     return result_path.relative_to(storage_dir).as_posix()
 
 
@@ -500,13 +527,21 @@ def _execute_pipeline(
     if "converted_plot" in result_json["artifacts"]:
         result_json["artifacts"]["restored_plot"] = result_json["artifacts"]["converted_plot"]
 
-    result_json_path = _write_result_json_to_storage(result_json, src_file, storage_dir)
+    try:
+        result_json_path = _write_result_json_to_storage(result_json, src_file, storage_dir)
+    except ValueError as exc:
+        raise PipelineOutputInvalidError(str(exc), result_json) from exc
+
     return result_json, result_json_path, 1, len(series_list)
 
 
-def _build_failed_result_json(error_message: str, error_code: str) -> Dict[str, Any]:
+def _build_failed_result_json(
+    error_message: str,
+    error_code: str,
+    artifacts: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     return {
-        "artifacts": {},
+        "artifacts": artifacts or {},
         "ml_meta": {
             "worker_error": {
                 "message": error_message,
@@ -514,6 +549,18 @@ def _build_failed_result_json(error_message: str, error_code: str) -> Dict[str, 
             }
         },
     }
+
+
+def _error_code_for_exception(error: Exception) -> str:
+    if isinstance(error, ValueError) and "Non-finite numeric value" in str(error):
+        return "pipeline_output_invalid"
+    return "unexpected_worker_error"
+
+
+def _artifacts_for_exception(error: Exception) -> Dict[str, Any]:
+    if isinstance(error, PipelineOutputInvalidError):
+        return error.artifacts
+    return {}
 
 
 def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=None, lineformer_use_preprocessing=True):
@@ -572,7 +619,8 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
         if not src_file.is_absolute():
             src_file = storage_dir / src_file
 
-        failed_result_json = _build_failed_result_json(str(e), "unexpected_worker_error")
+        error_code = _error_code_for_exception(e)
+        failed_result_json = _build_failed_result_json(str(e), error_code, _artifacts_for_exception(e))
         failed_result_json_path = _write_result_json_to_storage(failed_result_json, src_file, storage_dir)
 
         failed_payload = {
@@ -583,7 +631,7 @@ def process_job(chart_id, original_path, mqtt_client, job_id=None, message_id=No
             "requestMessageId": message_id,
             "workerId": WORKER_ID,
             "errorMessage": str(e),
-            "errorCode": "unexpected_worker_error",
+            "errorCode": error_code,
             "retryable": False,
             "resultJsonPath": failed_result_json_path,
             "failedAt": datetime.now().isoformat()
@@ -607,8 +655,8 @@ def _process_db_job(conn, job: Job) -> None:
         _mark_db_done(conn, job, result_json, n_panels, n_series)
         print(f"[WORKER] Chart {job.chart_id} done (DB mode)")
     except Exception as e:
-        error_code = "unexpected_worker_error"
-        failed_result_json = _build_failed_result_json(str(e), error_code)
+        error_code = _error_code_for_exception(e)
+        failed_result_json = _build_failed_result_json(str(e), error_code, _artifacts_for_exception(e))
         _mark_db_error(conn, job, str(e), error_code, failed_result_json)
         print(f"[WORKER_ERROR] Chart {job.chart_id} failed (DB mode): {e}")
 
@@ -660,7 +708,7 @@ def on_connect(client, userdata, flags, rc):
     # Этот callback срабатывает, когда worker наконец достучался до MQTT-брокера.
     # После подключения подписываемся на канал, куда backend кидает просьбы обработать график.
     print(f"[MQTT] Connected to broker {MQTT_BROKER}:{MQTT_PORT}")
-    client.subscribe("charts/process/request")
+    client.subscribe(MQTT_REQUEST_TOPIC)
 
 
 def on_message(client, userdata, msg):
@@ -717,7 +765,13 @@ def main():
         worker_thread.start()
         # Подключаемся к брокеру и дальше живём в бесконечном MQTT-цикле:
         # ждём сообщения, вызываем callbacks и поддерживаем соединение.
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        while True:
+            try:
+                client.connect(MQTT_BROKER, MQTT_PORT, 60)
+                break
+            except OSError as e:
+                print(f"[MQTT] Broker is not ready ({e}); retrying in 1s...")
+                time.sleep(1)
         print("[WORKER] Listening for jobs (MQTT mode)...")
         client.loop_forever()
         return 0

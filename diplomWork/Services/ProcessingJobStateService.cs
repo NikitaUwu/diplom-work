@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using DiplomWork.Configuration;
 using DiplomWork.Data;
 using DiplomWork.Dtos;
+using DiplomWork.Exceptions;
 using DiplomWork.Helpers;
 using DiplomWork.Models;
 using Microsoft.EntityFrameworkCore;
@@ -143,18 +144,41 @@ public sealed class ProcessingJobStateService
                 return;
             }
 
-            var (resultJson, resultLoadedFromStorage) = await ResolveResultJsonAsync(chart, payload, cancellationToken);
+            JsonObject? resultJson;
+            bool resultLoadedFromStorage;
+            try
+            {
+                (resultJson, resultLoadedFromStorage) = await ResolveResultJsonAsync(chart, payload, cancellationToken);
+            }
+            catch (Exception ex) when (ex is JsonException or ApiProblemException)
+            {
+                MarkCompletedResultInvalid(job, chart, DateTimeOffset.UtcNow, $"Invalid completed result JSON: {ex.Message}");
+                return;
+            }
+
             if (resultJson is null)
             {
-                _logger.LogWarning("Ignoring completed event for job {JobId} without resultJson.", job.Id);
+                MarkCompletedResultInvalid(job, chart, DateTimeOffset.UtcNow, "Completed event did not include resultJson or resultJsonPath.");
                 return;
             }
 
             loadedResultJsonFromStorage = resultLoadedFromStorage;
 
+            JsonDocument? resultDocument;
+            (int nPanels, int nSeries) counts;
+            try
+            {
+                resultDocument = JsonHelpers.ToDocument(resultJson);
+                counts = CountPanelsAndSeries(resultJson);
+            }
+            catch (JsonException ex)
+            {
+                MarkCompletedResultInvalid(job, chart, DateTimeOffset.UtcNow, $"Invalid completed result JSON: {ex.Message}");
+                return;
+            }
+
             var now = DateTimeOffset.UtcNow;
-            var resultDocument = JsonHelpers.ToDocument(resultJson);
-            var (nPanels, nSeries) = CountPanelsAndSeries(resultJson);
+            var (nPanels, nSeries) = counts;
 
             job.Status = "done";
             job.ErrorMessage = null;
@@ -362,6 +386,43 @@ public sealed class ProcessingJobStateService
             chart.ErrorMessage = errorMessage;
             chart.ProcessedAt = now;
         }
+    }
+
+    private void MarkCompletedResultInvalid(ProcessingJob job, Chart chart, DateTimeOffset now, string errorMessage)
+    {
+        var trimmedMessage = TrimError(errorMessage);
+        job.Status = "error";
+        job.ErrorMessage = trimmedMessage;
+        job.ErrorCode = ProcessingErrorCatalog.Codes.PipelineOutputInvalid;
+        job.WorkerId = null;
+        job.LastHeartbeatAt = now;
+        job.LeasedUntil = null;
+        job.NextRetryAt = null;
+        job.FinishedAt = now;
+        job.ResultPayload = JsonHelpers.ToDocument(_buildInvalidResultJson(trimmedMessage));
+
+        chart.Status = ChartStatus.error.ToString();
+        chart.ErrorMessage = trimmedMessage;
+        chart.ProcessedAt = now;
+        chart.ResultJson = JsonHelpers.ToDocument(_buildInvalidResultJson(trimmedMessage));
+
+        _logger.LogWarning(
+            "Completed event for job {JobId} was converted to terminal error because result JSON is invalid: {ErrorMessage}",
+            job.Id,
+            trimmedMessage);
+
+        static JsonObject _buildInvalidResultJson(string? message) => new()
+        {
+            ["artifacts"] = new JsonObject(),
+            ["ml_meta"] = new JsonObject
+            {
+                ["worker_error"] = new JsonObject
+                {
+                    ["message"] = message,
+                    ["code"] = ProcessingErrorCatalog.Codes.PipelineOutputInvalid,
+                },
+            },
+        };
     }
 
     private JsonObject BuildRetryRequestPayload(ProcessingJob job, Chart chart, string newMessageId)
