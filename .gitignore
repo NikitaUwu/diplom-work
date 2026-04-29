@@ -56,3 +56,5 @@ ml-worker/extract-line-chart-data.zip
 ml-worker/iter_1800.pth
 ml-worker/weight/*
 !ml-worker/weight/README.md
+Testapi
+testapi.ps1
