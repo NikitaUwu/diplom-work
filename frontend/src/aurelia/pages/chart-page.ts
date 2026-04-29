@@ -30,7 +30,7 @@ export class ChartPage {
   public showAutoSplineInfo = false;
   public saveError = '';
   public saving = false;
-  public showOriginalBackdrop = false;
+  public showOriginalBackdrop = true;
   public debugProcessingElapsedText = '';
   public debugProcessingFilename = '';
 
@@ -78,7 +78,7 @@ export class ChartPage {
     this.saveError = '';
     this.error = '';
     this.pollError = '';
-    this.showOriginalBackdrop = false;
+    this.showOriginalBackdrop = true;
     this.debugProcessingElapsedText = '';
     this.debugProcessingFilename = '';
 

@@ -56,11 +56,6 @@ type AxisWarp = {
   screenKnots: number[]; // 0..1
 };
 
-type BackdropOffset = {
-  x: number;
-  y: number;
-};
-
 type ResizeAxis = "x" | "y" | "both";
 
 type DeletePointEntry = {
@@ -228,6 +223,37 @@ function parseOverlayAxisSamples(value: unknown): OverlayAxisSample[] {
   return normalized;
 }
 
+function extrapolateDomainFromAxisSamples(
+  fallbackDomain: [number, number],
+  samples: OverlayAxisSample[]
+): [number, number] {
+  if (samples.length < 2) return fallbackDomain;
+
+  const byScreen = samples
+    .slice()
+    .sort((a, b) => a.screen - b.screen || a.value - b.value);
+  const first = byScreen[0];
+  const second = byScreen[1];
+  const beforeLast = byScreen[byScreen.length - 2];
+  const last = byScreen[byScreen.length - 1];
+
+  const startDenom = second.screen - first.screen;
+  const endDenom = last.screen - beforeLast.screen;
+  if (Math.abs(startDenom) <= MIN_SPAN || Math.abs(endDenom) <= MIN_SPAN) {
+    return fallbackDomain;
+  }
+
+  const startSlope = (second.value - first.value) / startDenom;
+  const endSlope = (last.value - beforeLast.value) / endDenom;
+  const start = first.value - first.screen * startSlope;
+  const end = last.value + (1 - last.screen) * endSlope;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || Math.abs(end - start) <= MIN_SPAN) {
+    return fallbackDomain;
+  }
+
+  return [Math.min(start, end), Math.max(start, end)];
+}
+
 function niceTicks(min: number, max: number, count = 6): number[] {
   if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return [min];
   const span = Math.abs(max - min);
@@ -321,12 +347,14 @@ function parseEditorOverlayCalibration(resultJson: unknown): EditorOverlayCalibr
     : [];
   const xAxisSamples = parseOverlayAxisSamples(rawOverlay.x_axis_samples);
   const yAxisSamples = parseOverlayAxisSamples(rawOverlay.y_axis_samples);
+  const xDomain = extrapolateDomainFromAxisSamples([x0, x1], xAxisSamples);
+  const yDomain = extrapolateDomainFromAxisSamples([Math.min(y0, y1), Math.max(y0, y1)], yAxisSamples);
 
   return {
     artifactKey: typeof rawOverlay.artifact_key === "string" && rawOverlay.artifact_key.trim() ? rawOverlay.artifact_key : "original",
     plotArea: { left, top, right, bottom },
-    xDomain: [x0, x1],
-    yDomain: [Math.min(y0, y1), Math.max(y0, y1)],
+    xDomain,
+    yDomain,
     xTicks: xAxisSamples.length ? xAxisSamples.map((sample) => sample.value) : xTicks,
     yTicks: yAxisSamples.length ? yAxisSamples.map((sample) => sample.value) : yTicks,
     xAxisSamples,
@@ -698,10 +726,6 @@ export default function GraphEditor({
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null);
   const [editorWidthScale, setEditorWidthScale] = useState(1);
   const [editorHeightScale, setEditorHeightScale] = useState(1);
-  const [backdropMoveMode, setBackdropMoveMode] = useState(false);
-  const [backdropScaleX, setBackdropScaleX] = useState(1);
-  const [backdropScaleY, setBackdropScaleY] = useState(1);
-  const [backdropOffset, setBackdropOffset] = useState<BackdropOffset>({ x: 0, y: 0 });
   const prevDomainXRef = useRef<[number, number]>(view.domainX);
   const prevDomainYRef = useRef<[number, number]>(view.domainY);
 
@@ -717,14 +741,6 @@ export default function GraphEditor({
       startWarpY: AxisWarp | null;
       startX: number;
       startY: number;
-    }
-  >(null);
-  const backdropDragRef = useRef<
-    null | {
-      pointerId: number;
-      startClientX: number;
-      startClientY: number;
-      startOffset: BackdropOffset;
     }
   >(null);
   const resizeDragRef = useRef<
@@ -778,10 +794,8 @@ export default function GraphEditor({
 
 
   useEffect(() => {
-    setBackdropMoveMode(false);
-    setBackdropScaleX(1);
-    setBackdropScaleY(1);
-    setBackdropOffset({ x: 0, y: 0 });
+    setEditorWidthScale(1);
+    setEditorHeightScale(1);
   }, [chartId, backdropImageUrl]);
 
   useEffect(() => {
@@ -790,10 +804,6 @@ export default function GraphEditor({
     setNewNameInput("");
   }, [chartId]);
 
-  useEffect(() => {
-    if (showBackdrop) return;
-    setBackdropMoveMode(false);
-  }, [showBackdrop]);
   const previewTimerRef = useRef<number | null>(null);
   const previewRequestRef = useRef(0);
   const [maxEditorWidth, setMaxEditorWidth] = useState<number | null>(null);
@@ -843,7 +853,6 @@ export default function GraphEditor({
     () => seriesList.find((s) => s.id === activeSeriesId) ?? null,
     [seriesList, activeSeriesId]
   );
-  const canMoveBackdrop = showBackdrop && Boolean(backdropImageUrl) && Boolean(imageSize);
   const detectedNames = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -883,10 +892,6 @@ export default function GraphEditor({
     setWarpY(buildWarpFromOverlaySamples(calibration.yDomain, calibration.yAxisSamples));
     setGridDragAxis(null);
     setPanMode(false);
-    setBackdropMoveMode(false);
-    setBackdropOffset({ x: 0, y: 0 });
-    setBackdropScaleX(1);
-    setBackdropScaleY(1);
   }, [
     calibration,
     overlayLocked,
@@ -1038,6 +1043,23 @@ export default function GraphEditor({
     return DEFAULT_EDITOR_PLOT_HEIGHT / Math.max(calibrationPlotSize.h, 1);
   }, [calibrationPlotSize]);
 
+  const fittedImageBox = useMemo(() => {
+    if (!imageSize) return null;
+
+    const availableWidth = Math.max(
+      MIN_EDITOR_WINDOW_WIDTH,
+      Math.floor(maxEditorWidth ?? DEFAULT_EDITOR_BOX.w)
+    );
+    const naturalWidth = Math.max(imageSize.w, 1);
+    const naturalHeight = Math.max(imageSize.h, 1);
+    const fitScale = availableWidth / naturalWidth;
+
+    return {
+      w: Math.max(MIN_EDITOR_WINDOW_WIDTH, Math.round(naturalWidth * fitScale)),
+      h: Math.max(1, Math.round(naturalHeight * fitScale)),
+    };
+  }, [imageSize, maxEditorWidth]);
+
   const basePlotSize = useMemo(() => {
     if (calibrationPlotSize) {
       return {
@@ -1054,18 +1076,29 @@ export default function GraphEditor({
     };
   }, [calibrationImageScale, calibrationPlotSize, imageSize]);
 
-  const contentBox = useMemo(() => {
-    const plotWidthScale = Math.max(MIN_EDITOR_WINDOW_SCALE, editorWidthScale);
-    const plotHeightScale = Math.max(MIN_EDITOR_WINDOW_SCALE, editorHeightScale);
-
-    const plotWidth = Math.max(50, Math.round(basePlotSize.w * plotWidthScale));
-    const plotHeight = Math.max(50, Math.round(basePlotSize.h * plotHeightScale));
+  const baseEditorBox = useMemo(() => {
+    if (fittedImageBox) {
+      return { w: fittedImageBox.w, h: fittedImageBox.h };
+    }
 
     return {
-      w: plotWidth + EDITOR_MARGIN.l + EDITOR_MARGIN.r,
-      h: plotHeight + EDITOR_MARGIN.t + EDITOR_MARGIN.b,
+      w: basePlotSize.w + EDITOR_MARGIN.l + EDITOR_MARGIN.r,
+      h: basePlotSize.h + EDITOR_MARGIN.t + EDITOR_MARGIN.b,
     };
-  }, [basePlotSize.h, basePlotSize.w, editorHeightScale, editorWidthScale]);
+  }, [basePlotSize.h, basePlotSize.w, fittedImageBox]);
+
+  const contentBox = useMemo(() => {
+    const width = Math.max(
+      MIN_EDITOR_WINDOW_WIDTH,
+      Math.round(baseEditorBox.w * Math.max(MIN_EDITOR_WINDOW_SCALE, editorWidthScale))
+    );
+    const height = Math.round(baseEditorBox.h * Math.max(MIN_EDITOR_WINDOW_SCALE, editorHeightScale));
+
+    return {
+      w: width,
+      h: fittedImageBox ? Math.max(1, height) : Math.max(MIN_EDITOR_WINDOW_HEIGHT, height),
+    };
+  }, [baseEditorBox.h, baseEditorBox.w, editorHeightScale, editorWidthScale, fittedImageBox]);
 
   const windowBox = contentBox;
   const visibleWindowWidth = Math.max(
@@ -1079,10 +1112,8 @@ export default function GraphEditor({
       Math.min(nextWidth, maxEditorWidth ?? nextWidth)
     );
 
-    const plotWidth = Math.max(50, boundedWidth - EDITOR_MARGIN.l - EDITOR_MARGIN.r);
-    const plotHeight = Math.max(50, nextHeight - EDITOR_MARGIN.t - EDITOR_MARGIN.b);
-    setEditorWidthScale(Math.max(MIN_EDITOR_WINDOW_SCALE, plotWidth / Math.max(basePlotSize.w, 1)));
-    setEditorHeightScale(Math.max(MIN_EDITOR_WINDOW_SCALE, plotHeight / Math.max(basePlotSize.h, 1)));
+    setEditorWidthScale(Math.max(MIN_EDITOR_WINDOW_SCALE, boundedWidth / Math.max(baseEditorBox.w, 1)));
+    setEditorHeightScale(Math.max(MIN_EDITOR_WINDOW_SCALE, nextHeight / Math.max(baseEditorBox.h, 1)));
   };
 
   const startResizeDrag = (
@@ -1131,13 +1162,38 @@ export default function GraphEditor({
   };
 
   const layout = useMemo(() => {
+    if (calibration && imageSize && fittedImageBox) {
+      const scaleX = contentBox.w / Math.max(imageSize.w, 1);
+      const scaleY = contentBox.h / Math.max(imageSize.h, 1);
+      const left = calibration.plotArea.left * scaleX;
+      const top = calibration.plotArea.top * scaleY;
+      const right = calibration.plotArea.right * scaleX;
+      const bottom = calibration.plotArea.bottom * scaleY;
+
+      return {
+        l: left,
+        t: top,
+        pw: Math.max(50, right - left),
+        ph: Math.max(50, bottom - top),
+      };
+    }
+
     const pw = Math.max(50, contentBox.w - EDITOR_MARGIN.l - EDITOR_MARGIN.r);
     const ph = Math.max(50, contentBox.h - EDITOR_MARGIN.t - EDITOR_MARGIN.b);
     return { ...EDITOR_MARGIN, pw, ph };
-  }, [contentBox]);
+  }, [calibration, contentBox, fittedImageBox, imageSize]);
 
   const backdropFrame = useMemo(() => {
     if (!imageSize) return null;
+
+    if (fittedImageBox) {
+      return {
+        width: Math.max(1, contentBox.w),
+        height: Math.max(1, contentBox.h),
+        x: 0,
+        y: 0,
+      };
+    }
 
     if (overlayLocked && calibration && calibrationPlotSize) {
       const autoScaleX = layout.pw / Math.max(calibrationPlotSize.w, 1);
@@ -1145,30 +1201,29 @@ export default function GraphEditor({
       const imagePlotCenterX = calibration.plotArea.left + calibrationPlotSize.w / 2;
       const imagePlotCenterY = calibration.plotArea.top + calibrationPlotSize.h / 2;
       return {
-        width: Math.max(1, imageSize.w * autoScaleX * backdropScaleX),
-        height: Math.max(1, imageSize.h * autoScaleY * backdropScaleY),
-        x: layout.l + layout.pw / 2 - imagePlotCenterX * autoScaleX * backdropScaleX + backdropOffset.x,
-        y: layout.t + layout.ph / 2 - imagePlotCenterY * autoScaleY * backdropScaleY + backdropOffset.y,
+        width: Math.max(1, imageSize.w * autoScaleX),
+        height: Math.max(1, imageSize.h * autoScaleY),
+        x: layout.l + layout.pw / 2 - imagePlotCenterX * autoScaleX,
+        y: layout.t + layout.ph / 2 - imagePlotCenterY * autoScaleY,
       };
     }
 
-    const width = Math.max(1, basePlotSize.w * backdropScaleX);
-    const height = Math.max(1, basePlotSize.h * backdropScaleY);
+    const width = Math.max(1, basePlotSize.w);
+    const height = Math.max(1, basePlotSize.h);
     return {
       width,
       height,
-      x: layout.l - (width - layout.pw) / 2 + backdropOffset.x,
-      y: layout.t - (height - layout.ph) / 2 + backdropOffset.y,
+      x: layout.l - (width - layout.pw) / 2,
+      y: layout.t - (height - layout.ph) / 2,
     };
   }, [
-    backdropOffset.x,
-    backdropOffset.y,
-    backdropScaleX,
-    backdropScaleY,
     basePlotSize.h,
     basePlotSize.w,
     calibration,
     calibrationPlotSize,
+    contentBox.h,
+    contentBox.w,
+    fittedImageBox,
     imageSize,
     layout.l,
     layout.ph,
@@ -1176,21 +1231,6 @@ export default function GraphEditor({
     layout.t,
     overlayLocked,
   ]);
-
-  const backdropBounds = useMemo(
-    () => ({
-      x: Math.max(contentBox.w, backdropFrame?.width ?? contentBox.w),
-      y: Math.max(contentBox.h, backdropFrame?.height ?? contentBox.h),
-    }),
-    [backdropFrame?.height, backdropFrame?.width, contentBox.h, contentBox.w]
-  );
-
-  useEffect(() => {
-    setBackdropOffset((current) => ({
-      x: clamp(current.x, -backdropBounds.x, backdropBounds.x),
-      y: clamp(current.y, -backdropBounds.y, backdropBounds.y),
-    }));
-  }, [backdropBounds.x, backdropBounds.y]);
   const pushUndo = (p: Patch) => setUndo((u) => [p, ...u].slice(0, 50));
 
   // keep warps consistent with domain changes
@@ -1309,7 +1349,6 @@ export default function GraphEditor({
     setGridDragAxis(null);
     setHover(null);
     setSelection(null);
-    setBackdropMoveMode(false);
     deleteSelectionDragRef.current = null;
     setDeleteSelectionBox(null);
   };
@@ -1609,7 +1648,6 @@ export default function GraphEditor({
         setMode("select");
         setGridDragAxis(null);
         setPanMode(false);
-        setBackdropMoveMode(false);
         setPendingAssignName(null);
         deleteSelectionDragRef.current = null;
         setDeleteSelectionBox(null);
@@ -1729,27 +1767,6 @@ export default function GraphEditor({
     return entries;
   };
 
-  const resetBackdropTransform = () => {
-    setBackdropOffset({ x: 0, y: 0 });
-    setBackdropScaleX(1);
-    setBackdropScaleY(1);
-  };
-
-  const startBackdropDrag = (e: React.PointerEvent) => {
-    if (!canMoveBackdrop) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    backdropDragRef.current = {
-      pointerId: e.pointerId,
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      startOffset: { ...backdropOffset },
-    };
-    svgRef.current?.setPointerCapture?.(e.pointerId);
-  };
-
   const startPanFromEvent = (e: React.PointerEvent) => {
     const el = svgRef.current;
     if (!el) return;
@@ -1816,11 +1833,6 @@ export default function GraphEditor({
   };
 
   const onSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (backdropMoveMode && canMoveBackdrop) {
-      startBackdropDrag(e);
-      return;
-    }
-
     if (pendingAssignName) return;
 
     if (gridDragAxis) return;
@@ -1893,7 +1905,7 @@ export default function GraphEditor({
 
   const onSvgDoubleClick = (e: React.MouseEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
-    if (mode === "delete-point" || gridDragAxis || panMode || backdropMoveMode || pendingAssignName) return;
+    if (mode === "delete-point" || gridDragAxis || panMode || pendingAssignName) return;
     if (e.target instanceof SVGCircleElement) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
@@ -1913,11 +1925,6 @@ export default function GraphEditor({
   };
 
   const onHandlePointerDown = (e: React.PointerEvent, seriesId: string, index: number) => {
-    if (backdropMoveMode && canMoveBackdrop) {
-      startBackdropDrag(e);
-      return;
-    }
-
     if (applyPendingNameToSeries(seriesId)) {
       e.preventDefault();
       e.stopPropagation();
@@ -1993,17 +2000,6 @@ export default function GraphEditor({
         startY: drag.startY,
         endX: e.clientX - rect.left,
         endY: e.clientY - rect.top,
-      });
-      return;
-    }
-
-    if (backdropDragRef.current) {
-      const drag = backdropDragRef.current;
-      if (e.pointerId !== drag.pointerId) return;
-
-      setBackdropOffset({
-        x: clamp(drag.startOffset.x + (e.clientX - drag.startClientX), -backdropBounds.x, backdropBounds.x),
-        y: clamp(drag.startOffset.y + (e.clientY - drag.startClientY), -backdropBounds.y, backdropBounds.y),
       });
       return;
     }
@@ -2134,13 +2130,6 @@ export default function GraphEditor({
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
         e.currentTarget.releasePointerCapture(e.pointerId);
       }
-      return;
-    }
-
-    if (backdropDragRef.current) {
-      const drag = backdropDragRef.current;
-      if (e.pointerId !== drag.pointerId) return;
-      backdropDragRef.current = null;
       return;
     }
 
@@ -2346,31 +2335,6 @@ export default function GraphEditor({
           </Button>
         )}
 
-        {!compactMode && canMoveBackdrop && (
-          <Button
-            variant="secondary"
-            type="button"
-            onClick={() => {
-              setErr(null);
-              setPanMode(false);
-              setGridDragAxis(null);
-              setHover(null);
-              setSelection(null);
-              setPendingAssignName(null);
-              setMode("select");
-              deleteSelectionDragRef.current = null;
-              setDeleteSelectionBox(null);
-              setBackdropMoveMode((value) => !value);
-            }}
-            className={
-              backdropMoveMode
-                ? "border-amber-400 bg-amber-100 text-amber-900 hover:bg-amber-200 dark:border-amber-500 dark:bg-amber-950/50 dark:text-amber-200 dark:hover:bg-amber-900/70"
-                : undefined
-            }
-          >
-            {backdropMoveMode ? "Закончить подложку" : "Настроить подложку"}
-          </Button>
-        )}
         <Button
           variant="secondary"
           type="button"
@@ -2380,7 +2344,6 @@ export default function GraphEditor({
             setGridDragAxis(null);
             setHover(null);
             setSelection(null);
-            setBackdropMoveMode(false);
             setPendingAssignName(null);
             deleteSelectionDragRef.current = null;
             setDeleteSelectionBox(null);
@@ -2604,54 +2567,6 @@ export default function GraphEditor({
         </div>
       </div>
 
-      {backdropMoveMode && canMoveBackdrop && (
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950 shadow-sm dark:border-amber-900/50 dark:bg-amber-950/25 dark:text-amber-100">
-          <div className="font-semibold">Подложка</div>
-          <div className="text-xs text-amber-800 dark:text-amber-200">
-            Тащи изображение мышью, ширину и высоту меняй ползунками.
-          </div>
-          <label className="flex items-center gap-2">
-            <span className="text-xs font-medium">Ширина</span>
-            <input
-              type="range"
-              min={0.2}
-              max={3}
-              step={0.01}
-              value={backdropScaleX}
-              onChange={(e) => setBackdropScaleX(Number(e.target.value))}
-              className="w-36"
-            />
-            <span className="w-12 text-xs text-amber-700 dark:text-amber-200">{Math.round(backdropScaleX * 100)}%</span>
-          </label>
-          <label className="flex items-center gap-2">
-            <span className="text-xs font-medium">Высота</span>
-            <input
-              type="range"
-              min={0.2}
-              max={3}
-              step={0.01}
-              value={backdropScaleY}
-              onChange={(e) => setBackdropScaleY(Number(e.target.value))}
-              className="w-36"
-            />
-            <span className="w-12 text-xs text-amber-700 dark:text-amber-200">{Math.round(backdropScaleY * 100)}%</span>
-          </label>
-          <Button
-            variant="secondary"
-            type="button"
-            onClick={resetBackdropTransform}
-            disabled={
-              Math.abs(backdropScaleX - 1) < 1e-6 &&
-              Math.abs(backdropScaleY - 1) < 1e-6 &&
-              Math.abs(backdropOffset.x) < 1e-6 &&
-              Math.abs(backdropOffset.y) < 1e-6
-            }
-          >
-            Сбросить подложку
-          </Button>
-        </div>
-      )}
-
       <div className={compactMode ? "w-full overflow-auto" : "flex flex-col gap-4 md:flex-row md:items-start"}>
         {!compactMode && showSidebar && (
           <aside className="w-full shrink-0 rounded-2xl bg-white p-4 ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800 md:w-72">
@@ -2752,7 +2667,7 @@ export default function GraphEditor({
               <div
                 className="pointer-events-none absolute overflow-hidden"
                 style={
-                  overlayLocked
+                  fittedImageBox || overlayLocked
                     ? {
                         left: 0,
                         top: 0,
@@ -2777,7 +2692,7 @@ export default function GraphEditor({
                   draggable={false}
                   className="absolute select-none"
                   style={
-                    overlayLocked
+                    fittedImageBox || overlayLocked
                       ? {
                           left: backdropFrame.x,
                           top: backdropFrame.y,
@@ -2813,7 +2728,7 @@ export default function GraphEditor({
               width={contentBox.w}
               height={contentBox.h}
               preserveAspectRatio="none"
-              style={{ cursor: backdropMoveMode ? (backdropDragRef.current ? "grabbing" : "grab") : panMode ? "grab" : pendingAssignName ? "crosshair" : mode === "delete-point" ? "crosshair" : "default" }}
+              style={{ cursor: panMode ? "grab" : pendingAssignName ? "crosshair" : mode === "delete-point" ? "crosshair" : "default" }}
               onPointerDown={onSvgPointerDown}
               onDoubleClick={onSvgDoubleClick}
               onPointerMove={onSvgPointerMove}

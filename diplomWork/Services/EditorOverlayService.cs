@@ -9,7 +9,7 @@ public sealed class EditorOverlayService
 {
     private const double ValueEps = 1e-9;
     private const string LineformerPointSource = "lineformer_coordinates";
-    private const string LineformerAlignmentVersion = "lineformer_overlay_v4";
+    private const string LineformerAlignmentVersion = "lineformer_overlay_v5";
     private readonly AppOptions _options;
 
     public EditorOverlayService(AppOptions options)
@@ -50,6 +50,13 @@ public sealed class EditorOverlayService
         }
 
         var currentMeta = enriched["ml_meta"] as JsonObject ?? new JsonObject();
+        if (overlay is not null)
+        {
+            overlay = NormalizeOverlayDomains(overlay);
+            currentMeta["editor_overlay"] = overlay;
+            enriched["ml_meta"] = currentMeta;
+        }
+
         var pointSource = JsonHelpers.GetString(currentMeta["point_source"])?.Trim().ToLowerInvariant() ?? string.Empty;
         var alignmentVersion = JsonHelpers.GetString(currentMeta["editor_alignment_version"])?.Trim() ?? string.Empty;
         if ((pointSource == LineformerPointSource && alignmentVersion == LineformerAlignmentVersion) || overlay is null)
@@ -112,17 +119,16 @@ public sealed class EditorOverlayService
         }
 
         var (left, top, right, bottom) = plotArea.Value;
-        var xDomain = FitAxisDomain(xSamples, left, right);
-        var yDomain = FitAxisDomain(ySamples, bottom, top);
-        if (xDomain is null || yDomain is null)
+        var xAxisSamples = BuildAxisScreenSamples(xSamples, left, right);
+        var yAxisSamples = BuildAxisScreenSamples(ySamples, bottom, top);
+        if (xAxisSamples.Count < 2 || yAxisSamples.Count < 2)
         {
             return null;
         }
 
-        var yDomainSorted = (Math.Min(yDomain.Value.Start, yDomain.Value.End), Math.Max(yDomain.Value.Start, yDomain.Value.End));
-        var xAxisSamples = BuildAxisScreenSamples(xSamples, left, right);
-        var yAxisSamples = BuildAxisScreenSamples(ySamples, bottom, top);
-        if (xAxisSamples.Count < 2 || yAxisSamples.Count < 2)
+        var xDomain = EstimateAxisDomain(xAxisSamples);
+        var yDomain = EstimateAxisDomain(yAxisSamples);
+        if (xDomain is null || yDomain is null)
         {
             return null;
         }
@@ -140,13 +146,32 @@ public sealed class EditorOverlayService
                     ["bottom"] = bottom,
                 },
                 ["x_domain"] = new JsonArray(xDomain.Value.Start, xDomain.Value.End),
-                ["y_domain"] = new JsonArray(yDomainSorted.Item1, yDomainSorted.Item2),
+                ["y_domain"] = new JsonArray(yDomain.Value.Start, yDomain.Value.End),
                 ["x_ticks"] = new JsonArray(xAxisSamples.Select(sample => JsonValue.Create(sample.Value)).ToArray()),
                 ["y_ticks"] = new JsonArray(yAxisSamples.Select(sample => JsonValue.Create(sample.Value)).ToArray()),
                 ["x_axis_samples"] = new JsonArray(xAxisSamples.Select(sample => sample.ToJsonNode()).ToArray()),
                 ["y_axis_samples"] = new JsonArray(yAxisSamples.Select(sample => sample.ToJsonNode()).ToArray()),
             },
         };
+    }
+
+    private static JsonObject NormalizeOverlayDomains(JsonObject overlay)
+    {
+        var normalized = JsonHelpers.DeepCloneObject(overlay);
+
+        var xDomain = EstimateAxisDomain(NormalizeAxisSamples(normalized["x_axis_samples"]));
+        if (xDomain is not null)
+        {
+            normalized["x_domain"] = new JsonArray(xDomain.Value.Start, xDomain.Value.End);
+        }
+
+        var yDomain = EstimateAxisDomain(NormalizeAxisSamples(normalized["y_axis_samples"]));
+        if (yDomain is not null)
+        {
+            normalized["y_domain"] = new JsonArray(yDomain.Value.Start, yDomain.Value.End);
+        }
+
+        return normalized;
     }
 
     private string? LatestWorkerOutputRoot(int chartId)
@@ -374,6 +399,41 @@ public sealed class EditorOverlayService
         }
 
         return (startValue, endValue);
+    }
+
+    private static (double Start, double End)? EstimateAxisDomain(IReadOnlyList<AxisSample> samples)
+    {
+        if (samples.Count < 2)
+        {
+            return null;
+        }
+
+        var byScreen = samples
+            .OrderBy(sample => sample.Screen)
+            .ThenBy(sample => sample.Value)
+            .ToList();
+        var first = byScreen[0];
+        var second = byScreen[1];
+        var beforeLast = byScreen[^2];
+        var last = byScreen[^1];
+
+        var startDenom = second.Screen - first.Screen;
+        var endDenom = last.Screen - beforeLast.Screen;
+        if (Math.Abs(startDenom) <= ValueEps || Math.Abs(endDenom) <= ValueEps)
+        {
+            return null;
+        }
+
+        var startSlope = (second.Value - first.Value) / startDenom;
+        var endSlope = (last.Value - beforeLast.Value) / endDenom;
+        var start = first.Value - (first.Screen * startSlope);
+        var end = last.Value + ((1.0 - last.Screen) * endSlope);
+        if (!double.IsFinite(start) || !double.IsFinite(end) || Math.Abs(end - start) <= ValueEps)
+        {
+            return null;
+        }
+
+        return (Math.Min(start, end), Math.Max(start, end));
     }
 
     private static List<AxisSample> BuildAxisScreenSamples(List<(double Coord, double Value)> samples, double axisStartPx, double axisEndPx)
