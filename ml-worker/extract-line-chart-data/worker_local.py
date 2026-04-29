@@ -27,8 +27,6 @@ class PipelineOutputInvalidError(ValueError):
         artifacts = partial_result_json.get("artifacts")
         self.artifacts = dict(artifacts) if isinstance(artifacts, dict) else {}
 
-
-# Keep Windows console output predictable.
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 os.environ.setdefault("MPLBACKEND", "Agg")
@@ -65,8 +63,6 @@ def _storage_dir_from_original(original_path: Path) -> Path:
 
     if original_path.is_absolute():
         resolved = original_path.resolve()
-        # Expected layout: <storage>/user_<user_id>/<chart_id>/<filename>
-        # so storage root is three levels above the file.
         if len(resolved.parents) >= 3:
             return resolved.parents[2]
 
@@ -136,10 +132,6 @@ MQTT_PUBLISH_RETRY_DELAY_SECONDS = max(1, _env_int("MQTT_PUBLISH_RETRY_DELAY_SEC
 
 
 def _save_pipeline_input(src_file: Path, dst_path: Path, max_size: int) -> int:
-    """Write a possibly downscaled copy of ``src_file`` to ``dst_path``.
-
-    Returns the actual max dimension written.
-    """
     with Image.open(src_file) as img:
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
