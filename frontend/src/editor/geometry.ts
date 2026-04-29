@@ -16,6 +16,7 @@ export function normalizeWarp(warp: AxisWarp): AxisWarp {
 
   if (dataKnots.length < 2) return { dataKnots, screenKnots: [0, 1] };
 
+  // Точки сетки должны идти по порядку, иначе линия оси начнет ломаться.
   while (screenKnots.length < dataKnots.length) screenKnots.push(1);
   while (screenKnots.length > dataKnots.length) screenKnots.pop();
 
@@ -97,6 +98,7 @@ export function buildWarpFromOverlaySamples(domain: [number, number], samples: O
   const [d0, d1] = domain;
   if (!Number.isFinite(d0) || !Number.isFinite(d1) || Math.abs(d1 - d0) <= MIN_SPAN) return null;
 
+  // В сетку добавляем только подписи, которые лежат внутри видимой области.
   const dataKnots = [d0];
   const screenKnots = [0];
 

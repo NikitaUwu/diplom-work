@@ -45,6 +45,7 @@ public sealed class MqttPublisherService
             .WithPayload(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload)))
             .Build();
 
+        // Один общий клиент не дает плодить лишние подключения при нескольких загрузках подряд.
         await _clientLock.WaitAsync(cancellationToken);
         try
         {
@@ -67,6 +68,7 @@ public sealed class MqttPublisherService
             return _client;
         }
 
+        // Подключаемся только тогда, когда действительно нужно отправить сообщение.
         _clientOptions ??= BuildClientOptions();
         await _client.ConnectAsync(_clientOptions, cancellationToken);
         _logger.LogInformation("MQTT publisher connected to {Host}:{Port}.", _options.MqttHost, _options.MqttPort);

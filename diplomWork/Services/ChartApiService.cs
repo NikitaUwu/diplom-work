@@ -90,6 +90,7 @@ public sealed class ChartApiService
         var sha = HashingHelpers.Sha256Hex(fileBytes);
         var fileName = SafeFilename(upload.FileName);
 
+        // Сначала заводим запись, чтобы у файла появился постоянный id для папки хранения.
         var chart = new Chart
         {
             UserId = userId,
@@ -108,6 +109,7 @@ public sealed class ChartApiService
         var wroteFile = false;
         try
         {
+            // Путь проверяем вручную, чтобы имя файла не смогло вывести запись за папку пользователя.
             chartDirectory = _storageService.GetChartDirectory(userId, chart.Id);
             originalPath = Path.GetFullPath(Path.Combine(chartDirectory, fileName));
             var userRoot = _storageService.GetUserRoot(userId);
@@ -127,6 +129,7 @@ public sealed class ChartApiService
         }
         catch
         {
+            // Если на середине загрузки что-то упало, убираем и файл, и запись из базы.
             if (wroteFile && originalPath is not null && File.Exists(originalPath))
             {
                 File.Delete(originalPath);
@@ -723,6 +726,7 @@ public sealed class ChartApiService
         bool lineformerUsePreprocessing,
         CancellationToken cancellationToken)
     {
+        // Этот id связывает запрос к воркеру со всеми ответами по этой же попытке.
         var messageId = Guid.NewGuid().ToString("N");
         var payload = new JsonObject
         {
@@ -761,6 +765,7 @@ public sealed class ChartApiService
             return;
         }
 
+        // Сообщение сначала сохраняется в базе, а фоновая служба отправит его в MQTT.
         var payload = JsonHelpers.FromDocument(processingJob.RequestPayload) as JsonNode ?? new JsonObject
         {
             ["schemaVersion"] = 1,

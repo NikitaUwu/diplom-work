@@ -14,6 +14,7 @@ public sealed class SplineService
             return pts.Select(point => new List<double> { point.X, point.Y }).ToList();
         }
 
+        // Для кривой нужны точки с разными X, иначе плавно соединить их нельзя.
         var xs = pts.Select(point => point.X).ToArray();
         var ys = pts.Select(point => point.Y).ToArray();
         for (var index = 1; index < xs.Length; index++)
@@ -92,6 +93,7 @@ public sealed class SplineService
         var sampleCount = Math.Max(50, samples);
         var result = new List<List<double>>(sampleCount + 1);
 
+        // Возвращаем много точек, чтобы редактор мог нарисовать плавную линию.
         for (var index = 0; index <= sampleCount; index++)
         {
             var x = xMin + ((xMax - xMin) * index) / sampleCount;

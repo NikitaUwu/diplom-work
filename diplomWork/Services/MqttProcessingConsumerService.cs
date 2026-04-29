@@ -64,6 +64,7 @@ public sealed class MqttProcessingConsumerService : BackgroundService
 
         client.ConnectedAsync += async _ =>
         {
+            // Слушаем только ответы воркера по уже созданным задачам.
             var subscribeOptions = factory.CreateSubscribeOptionsBuilder()
                 .WithTopicFilter(filter => filter.WithTopic(_options.MqttProcessAcceptedTopic))
                 .WithTopicFilter(filter => filter.WithTopic(_options.MqttProcessHeartbeatTopic))
@@ -119,6 +120,7 @@ public sealed class MqttProcessingConsumerService : BackgroundService
         JsonNode? payloadNode;
         try
         {
+            // Читаем сообщение двумя способами: как удобную модель и как исходный JSON для записи в базу.
             payload = JsonSerializer.Deserialize<ProcessingEventPayload>(payloadBytes, JsonOptions);
             payloadNode = JsonNode.Parse(Encoding.UTF8.GetString(payloadBytes));
         }
@@ -139,6 +141,7 @@ public sealed class MqttProcessingConsumerService : BackgroundService
 
         try
         {
+            // Каждый топик меняет состояние задачи по-своему.
             if (string.Equals(topic, _options.MqttProcessAcceptedTopic, StringComparison.Ordinal))
             {
                 await stateService.ApplyAcceptedAsync(topic, payload, payloadNode, cancellationToken);

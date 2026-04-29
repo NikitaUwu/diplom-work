@@ -85,7 +85,7 @@ async function readError(res: Response): Promise<string> {
       return `${res.status} ${res.statusText} - ${JSON.stringify(data)}`;
     }
   } catch {
-    // fallback below
+    // Если сервер вернул не JSON, ниже попробуем прочитать обычный текст.
   }
 
   const text = await res.text().catch(() => '');

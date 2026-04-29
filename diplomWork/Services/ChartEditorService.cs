@@ -22,6 +22,7 @@ public sealed class ChartEditorService
         var rawPanels = payload["panels"] as JsonArray;
         var normalizedPanels = new JsonArray();
 
+        // Сохраняем старые поля результата, но точки и кривые пересобираем из данных редактора.
         for (var panelIndex = 0; panelIndex < panels.Count; panelIndex++)
         {
             var panel = panels[panelIndex];
@@ -52,6 +53,7 @@ public sealed class ChartEditorService
                     nextPoints = pointTransform(nextPoints);
                 }
 
+                // Кривая нужна фронту сразу после сохранения, поэтому строим ее здесь.
                 nextSeriesItem["points"] = JsonHelpers.ToPointArray(nextPoints);
                 nextSeriesItem["approximation_method"] = "cubic_spline";
                 nextSeriesItem["curve_points"] = ToCurveJson(_splineService.SampleCubicSpline(nextPoints));

@@ -31,6 +31,7 @@ public sealed class ProcessingJobStateService
         JsonNode? payloadNode,
         CancellationToken cancellationToken)
     {
+        // Сначала запоминаем событие, чтобы повторное такое же сообщение не изменило задачу второй раз.
         return await ExecuteWithInboxAsync(topic, payload, payloadNode, cancellationToken, async () =>
         {
             var context = await LoadContextAsync(payload, cancellationToken);
@@ -79,6 +80,7 @@ public sealed class ProcessingJobStateService
         ProcessingEventPayload payload,
         CancellationToken cancellationToken)
     {
+        // Это короткий сигнал "воркер жив", поэтому он только продлевает время ожидания.
         var context = await LoadContextAsync(payload, cancellationToken);
         if (context is null)
         {
@@ -118,6 +120,7 @@ public sealed class ProcessingJobStateService
     {
         bool loadedResultJsonFromStorage = false;
 
+        // Готовый результат принимаем только один раз и только от текущей попытки.
         var applied = await ExecuteWithInboxAsync(topic, payload, payloadNode, cancellationToken, async () =>
         {
             var context = await LoadContextAsync(payload, cancellationToken);
@@ -219,6 +222,7 @@ public sealed class ProcessingJobStateService
     {
         bool loadedResultJsonFromStorage = false;
 
+        // Даже при ошибке воркер может прислать полезные картинки, поэтому результат тоже читаем.
         var applied = await ExecuteWithInboxAsync(topic, payload, payloadNode, cancellationToken, async () =>
         {
             var context = await LoadContextAsync(payload, cancellationToken);
@@ -290,6 +294,7 @@ public sealed class ProcessingJobStateService
     public async Task<int> ExpireTimedOutJobsAsync(CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
+        // Если от воркера давно нет сигнала, считаем задачу зависшей.
         var expiredJobs = await _db.ProcessingJobs
             .Where(item => item.Status == "processing" && item.LeasedUntil != null && item.LeasedUntil < now)
             .OrderBy(item => item.LeasedUntil)
@@ -329,6 +334,7 @@ public sealed class ProcessingJobStateService
     private void ScheduleRetry(ProcessingJob job, Chart chart, DateTimeOffset now, string reason, ProcessingRetryPolicy retryPolicy)
     {
         var nextRetryAt = now.AddSeconds(Math.Max(1, retryPolicy.RetryDelaySeconds));
+        // Новая попытка получает новый id, чтобы поздний ответ от старой попытки был проигнорирован.
         var newMessageId = Guid.NewGuid().ToString("N");
         var requestPayload = BuildRetryRequestPayload(job, chart, newMessageId);
         var requestDocument = JsonHelpers.ToDocument(requestPayload);
@@ -444,6 +450,7 @@ public sealed class ProcessingJobStateService
         CancellationToken cancellationToken,
         Func<Task> applyAction)
     {
+        // Запись события и изменение задачи идут вместе: либо сохраняется все, либо ничего.
         if (!_db.Database.IsRelational())
         {
             try
@@ -568,6 +575,7 @@ public sealed class ProcessingJobStateService
             return true;
         }
 
+        // Старые ответы не должны перезаписывать новую попытку обработки.
         return string.Equals(payload.RequestMessageId, job.MessageId, StringComparison.Ordinal);
     }
 

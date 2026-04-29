@@ -25,7 +25,7 @@ function writeJson(key: string, value: unknown): void {
   try {
     window.sessionStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // Debug-only storage should not affect upload or navigation.
+    // Этот таймер нужен только для отладки, поэтому не мешаем загрузке при ошибке хранилища.
   }
 }
 
@@ -40,7 +40,7 @@ export function clearActiveProcessingTimer(): void {
   try {
     window.sessionStorage.removeItem(ACTIVE_TIMER_KEY);
   } catch {
-    // Ignore storage failures for debug-only state.
+    // Ошибка очистки отладочного таймера не должна ломать страницу.
   }
 }
 

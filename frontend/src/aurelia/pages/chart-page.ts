@@ -41,6 +41,7 @@ export class ChartPage {
   public readonly onEditorResultJsonChange = (next: unknown) => {
     const hadAutoSpline = this.autoSplineSelectedPointCount > 0;
     this.setDraftResultJson(next);
+    // После ручной правки сохраняем подсветку автокривой, если она уже была построена.
     this.autoSplineHighlightResultJson = this.extractStoredAutoSplineResultJson(next);
     this.autoSplineError = '';
     this.autoSplinePointCount = this.deriveStoredAutoSplinePointCount(this.autoSplineHighlightResultJson);
@@ -532,6 +533,7 @@ export class ChartPage {
     }
 
     this.stopPolling();
+    // Номер запуска защищает от старых таймеров после перехода на другую страницу.
     const epoch = this.pollEpoch;
 
     const scheduleNext = (): void => {
@@ -597,6 +599,7 @@ export class ChartPage {
       return;
     }
 
+    // Если пользователь открыл страницу позже, время можно грубо посчитать по данным с сервера.
     if (!this.chart?.processedAt) {
       return;
     }

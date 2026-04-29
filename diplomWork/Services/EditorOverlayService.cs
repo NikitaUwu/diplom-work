@@ -28,6 +28,7 @@ public sealed class EditorOverlayService
         var enriched = JsonHelpers.DeepCloneObject(resultJson);
         var rawMeta = resultJson["ml_meta"] as JsonObject;
         var rawOverlay = rawMeta?["editor_overlay"] as JsonObject;
+        // Если воркер уже дал данные для совмещения с картинкой, используем их как основу.
         var hasAxisSamples =
             rawOverlay?["x_axis_samples"] is JsonArray xAxisSamples && xAxisSamples.Count >= 2 &&
             rawOverlay["y_axis_samples"] is JsonArray yAxisSamples && yAxisSamples.Count >= 2;
@@ -52,6 +53,7 @@ public sealed class EditorOverlayService
         var currentMeta = enriched["ml_meta"] as JsonObject ?? new JsonObject();
         if (overlay is not null)
         {
+            // Края осей пересчитываем по подписям, чтобы верхний и нижний тики совпадали с изображением.
             overlay = NormalizeOverlayDomains(overlay);
             currentMeta["editor_overlay"] = overlay;
             enriched["ml_meta"] = currentMeta;
@@ -93,6 +95,7 @@ public sealed class EditorOverlayService
 
         if (shouldReplaceWithLineformer)
         {
+            // В редактор отправляем точки LineFormer, потому что они лучше совпадают с исходной картинкой.
             enriched = ReplaceResultSeriesPoints(enriched, mappedLineformerPoints);
             currentMeta = enriched["ml_meta"] as JsonObject ?? new JsonObject();
             currentMeta["point_source"] = LineformerPointSource;
@@ -105,6 +108,7 @@ public sealed class EditorOverlayService
 
     private JsonObject? BuildOverlayFromSearchRoot(string searchRoot)
     {
+        // Собираем область графика и подписи осей из файлов, которые оставил воркер.
         var plotArea = ExtractPlotArea(searchRoot);
         if (plotArea is null)
         {
@@ -159,6 +163,7 @@ public sealed class EditorOverlayService
     {
         var normalized = JsonHelpers.DeepCloneObject(overlay);
 
+        // Берем не только первый и последний тик, а восстанавливаем край оси по ближайшим подписям.
         var xDomain = EstimateAxisDomain(NormalizeAxisSamples(normalized["x_axis_samples"]));
         if (xDomain is not null)
         {
@@ -339,6 +344,7 @@ public sealed class EditorOverlayService
                 item => Path.GetFileName(item.Key).ToLowerInvariant(),
                 item => item.Value);
 
+            // Соединяем найденную подпись с ее местом на картинке.
             var samples = new List<(double Coord, double Value)>();
             foreach (var item in labelPayload)
             {
@@ -408,6 +414,7 @@ public sealed class EditorOverlayService
             return null;
         }
 
+        // Подписи могут стоять внутри области графика, поэтому достраиваем значения до краев.
         var byScreen = samples
             .OrderBy(sample => sample.Screen)
             .ThenBy(sample => sample.Value)
@@ -444,6 +451,7 @@ public sealed class EditorOverlayService
             return [];
         }
 
+        // Переводим координату подписи в долю ширины или высоты области графика.
         var normalized = samples
             .Select(sample => (sample.Value, Screen: (sample.Coord - axisStartPx) / span))
             .Where(sample => sample.Screen >= -0.25 && sample.Screen <= 1.25)

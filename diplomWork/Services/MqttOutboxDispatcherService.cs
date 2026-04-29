@@ -42,6 +42,7 @@ public sealed class MqttOutboxDispatcherService : BackgroundService
                 var processed = await DispatchBatchAsync(stoppingToken);
                 if (processed == 0)
                 {
+                    // Если новых сообщений нет, ждем сигнал от загрузки файла или короткую паузу.
                     await _outboxSignal.WaitAsync(TimeSpan.FromSeconds(2), stoppingToken);
                 }
             }
@@ -63,6 +64,7 @@ public sealed class MqttOutboxDispatcherService : BackgroundService
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var now = DateTimeOffset.UtcNow;
 
+        // Берем только те сообщения, которые уже можно отправлять.
         var messages = await db.MqttMessages
             .Where(item => item.Direction == "out" &&
                            (item.Status == "pending" || item.Status == "error") &&
@@ -105,6 +107,7 @@ public sealed class MqttOutboxDispatcherService : BackgroundService
             }
             catch (Exception ex)
             {
+                // Ошибку не теряем: сообщение останется в базе и будет отправлено позже.
                 var delaySeconds = Math.Min(30, Math.Max(5, message.AttemptCount * 5));
                 message.Status = "error";
                 message.ErrorMessage = ex.Message.Length <= 2000 ? ex.Message : ex.Message[..2000];

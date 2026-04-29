@@ -46,6 +46,7 @@ export function detectLogFromSamples(samples: OverlayAxisSample[] | null | undef
     return false;
   }
 
+  // Сравниваем два варианта и выбираем такой, где подписи ложатся ровнее.
   const values = samples.map((sample) => sample.value);
   const screens = samples.map((sample) => sample.screen);
   const logs = values.map((value) => Math.log10(value));
@@ -76,6 +77,7 @@ function dedupeSorted(values: number[]): number[] {
 export function niceLogTicks(min: number, max: number): number[] {
   if (!(min > 0) || !(max > min)) return [];
 
+  // Для больших промежутков оставляем меньше подписей, чтобы сетка не стала слишком плотной.
   const startDec = Math.floor(Math.log10(min));
   const endDec = Math.ceil(Math.log10(max));
   const decades = Math.max(0, endDec - startDec);

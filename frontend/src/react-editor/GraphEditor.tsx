@@ -53,7 +53,7 @@ type View = {
 
 type AxisWarp = {
   dataKnots: number[];
-  screenKnots: number[]; // 0..1
+  screenKnots: number[]; // Доля ширины или высоты от 0 до 1.
 };
 
 type ResizeAxis = "x" | "y" | "both";
@@ -197,6 +197,7 @@ function toFiniteNumber(value: unknown): number | null {
 function parseOverlayAxisSamples(value: unknown): OverlayAxisSample[] {
   if (!Array.isArray(value)) return [];
 
+  // Берем только подписи осей, у которых есть и число, и место на картинке.
   const parsed = value
     .map((item) => {
       if (!isObj(item)) return null;
@@ -229,6 +230,7 @@ function extrapolateDomainFromAxisSamples(
 ): [number, number] {
   if (samples.length < 2) return fallbackDomain;
 
+  // Подписи часто стоят не на самом краю, поэтому достраиваем края оси по ближайшим подписям.
   const byScreen = samples
     .slice()
     .sort((a, b) => a.screen - b.screen || a.value - b.value);
@@ -271,7 +273,7 @@ function niceTicks(min: number, max: number, count = 6): number[] {
   return out.filter((t) => t >= min - eps && t <= max + eps);
 }
 
-// Подписи осей и tooltip показываем с точностью до сотых.
+// Подписи осей и всплывающую подсказку показываем с точностью до сотых.
 function formatTick(v: number) {
   if (!Number.isFinite(v)) return "-";
   const r = Math.round(v * 100) / 100;
@@ -310,6 +312,7 @@ function parsePanels(resultJson: unknown): Panel[] {
 function parseEditorOverlayCalibration(resultJson: unknown): EditorOverlayCalibration | null {
   if (!isObj(resultJson)) return null;
 
+  // Эти данные приходят с бэка и говорят, как совместить редактор с исходным изображением.
   const rawMeta = isObj((resultJson as any).ml_meta) ? ((resultJson as any).ml_meta as Record<string, any>) : null;
   const rawOverlay = rawMeta && isObj(rawMeta.editor_overlay) ? (rawMeta.editor_overlay as Record<string, any>) : null;
   if (!rawOverlay) return null;
@@ -463,6 +466,7 @@ function sampleCubicSpline(points: Point[], samples = 300): Point[] {
 
   const result: Point[] = [];
   const totalSamples = Math.max(samples, n);
+  // Рисуем кривую множеством близких точек, чтобы линия выглядела плавной.
   for (let sample = 0; sample < totalSamples; sample += 1) {
     const t = totalSamples === 1 ? 0 : sample / (totalSamples - 1);
     const x = xs[0] + (xs[n - 1] - xs[0]) * t;
@@ -507,6 +511,7 @@ function buildNextAutoSplineResultJson(base: unknown, highlightBase: unknown, pa
       : [];
 
   currentAutoSpline.panels = panels.map((panel, panelIndex) => {
+    // Сохраняем лишние поля из прошлого ответа, а точки заменяем на текущие.
     const rawPanel = isObj(sourcePanels[panelIndex]) ? { ...sourcePanels[panelIndex] } : {};
     const rawSeries = Array.isArray(rawPanel.series) ? rawPanel.series : [];
 
@@ -529,7 +534,7 @@ function buildNextAutoSplineResultJson(base: unknown, highlightBase: unknown, pa
   return out;
 }
 
-// ===== Warp helpers =====
+// ===== Помощники для подстройки сетки =====
 function _findSeg(knots: number[], v: number) {
   let i = knots.length - 2;
   for (let j = 0; j < knots.length - 1; j++) {
@@ -544,6 +549,7 @@ function normalizeWarp(w: AxisWarp): AxisWarp {
 
   if (dk.length < 2) return { dataKnots: dk, screenKnots: [0, 1] };
 
+  // Точки сетки должны идти слева направо или снизу вверх без пересечений.
   while (sk.length < dk.length) sk.push(1);
   while (sk.length > dk.length) sk.pop();
 
@@ -708,12 +714,12 @@ export default function GraphEditor({
   );
   const [deleteSelectionBox, setDeleteSelectionBox] = useState<DeleteSelectionBox | null>(null);
 
-  // show/hide curves
+  // Какие кривые сейчас видны.
   const [visibleIds, setVisibleIds] = useState<Set<string>>(() => new Set());
   const [visOpen, setVisOpen] = useState(false);
   const visRef = useRef<HTMLDivElement | null>(null);
 
-  // per-series color (index into COLOR_OPTIONS)
+  // Цвет каждой кривой.
   const [colorById, setColorById] = useState<Record<string, number>>({});
 
   const nameBeforeRef = useRef<string | null>(null);
@@ -902,6 +908,7 @@ export default function GraphEditor({
       window.clearTimeout(previewTimerRef.current);
     }
 
+    // Берем только последний ответ, чтобы старый расчет не перерисовал свежие точки.
     const requestId = previewRequestRef.current + 1;
     previewRequestRef.current = requestId;
 
@@ -935,7 +942,7 @@ export default function GraphEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ===== Fix BUG #1: do NOT re-add hidden series on any edit =====
+  // Скрытые кривые не должны снова появляться после любого редактирования.
   const prevIdsRef = useRef<string[]>([]);
   useEffect(() => {
     const currIds = seriesList.map((s) => s.id);
@@ -950,19 +957,19 @@ export default function GraphEditor({
     setVisibleIds((prevVis) => {
       const next = new Set(prevVis);
 
-      // init on first mount
+      // Первый показ: включаем все найденные кривые.
       if (prevIds.length === 0 && next.size === 0) {
         currIds.forEach((id) => next.add(id));
         return next;
       }
 
-      // remove deleted series from visibility
+      // Удаленную кривую убираем из списка видимых.
       for (const id of removed) next.delete(id);
 
-      // add ONLY newly added series (do not restore manually hidden)
+      // Новую кривую показываем, но вручную скрытые не трогаем.
       for (const id of added) next.add(id);
 
-      // keep at least one visible
+      // Хотя бы одна кривая должна остаться видимой.
       if (currIds.length && next.size === 0) next.add(currIds[0]);
 
       return next;
@@ -971,7 +978,7 @@ export default function GraphEditor({
     prevIdsRef.current = currIds;
   }, [seriesList]);
 
-  // keep active visible
+  // Активная кривая всегда должна быть видимой.
   useEffect(() => {
     if (!activeSeriesId) return;
     setVisibleIds((prev) => {
@@ -982,20 +989,20 @@ export default function GraphEditor({
     });
   }, [activeSeriesId]);
 
-  // if selection becomes hidden -> clear
+  // Если выбранная точка скрылась вместе с кривой, сбрасываем выбор.
   useEffect(() => {
     if (selection && !visibleIds.has(selection.seriesId)) setSelection(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleIds]);
 
-  // sync colors with series list (add new, remove missing)
+  // Держим цвета в том же составе, что и список кривых.
   useEffect(() => {
     const ids = seriesList.map((s) => s.id);
     setColorById((prev) => {
       const next: Record<string, number> = {};
       const used = new Set<number>();
 
-      // keep existing where possible
+      // Уже выбранные цвета сохраняем.
       for (const id of ids) {
         const idx = prev[id];
         if (typeof idx === "number") {
@@ -1004,7 +1011,7 @@ export default function GraphEditor({
         }
       }
 
-      // assign for new
+      // Новым кривым даем свободные цвета.
       for (let i = 0; i < ids.length; i++) {
         const id = ids[i];
         if (next[id] != null) continue;
@@ -1018,7 +1025,7 @@ export default function GraphEditor({
     });
   }, [seriesList]);
 
-  // close visibility dropdown on outside click
+  // Закрываем список кривых по клику вне него.
   useEffect(() => {
     if (!visOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -1046,6 +1053,7 @@ export default function GraphEditor({
   const fittedImageBox = useMemo(() => {
     if (!imageSize) return null;
 
+    // В обычном режиме редактор растягивается по ширине, сохраняя пропорции исходного изображения.
     const availableWidth = Math.max(
       MIN_EDITOR_WINDOW_WIDTH,
       Math.floor(maxEditorWidth ?? DEFAULT_EDITOR_BOX.w)
@@ -1163,6 +1171,7 @@ export default function GraphEditor({
 
   const layout = useMemo(() => {
     if (calibration && imageSize && fittedImageBox) {
+      // Когда есть данные от бэка, область графика берем прямо с исходной картинки.
       const scaleX = contentBox.w / Math.max(imageSize.w, 1);
       const scaleY = contentBox.h / Math.max(imageSize.h, 1);
       const left = calibration.plotArea.left * scaleX;
@@ -1187,6 +1196,7 @@ export default function GraphEditor({
     if (!imageSize) return null;
 
     if (fittedImageBox) {
+      // Подложка занимает весь редактор, а сетка кладется поверх нужной части изображения.
       return {
         width: Math.max(1, contentBox.w),
         height: Math.max(1, contentBox.h),
@@ -1233,7 +1243,7 @@ export default function GraphEditor({
   ]);
   const pushUndo = (p: Patch) => setUndo((u) => [p, ...u].slice(0, 50));
 
-  // keep warps consistent with domain changes
+  // При смене границ осей сохраняем ручную подстройку сетки.
   useEffect(() => {
     const oldD = prevDomainXRef.current;
     const newD = view.domainX;
@@ -1633,7 +1643,7 @@ export default function GraphEditor({
     });
   };
 
-  // hotkeys
+  // Горячие клавиши редактора.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
@@ -2004,7 +2014,7 @@ export default function GraphEditor({
       return;
     }
 
-    // tick drag
+    // Перетаскивание подписи оси.
     if (tickDragRef.current) {
       const t = tickDragRef.current;
       if (e.pointerId !== t.pointerId) return;
@@ -2024,7 +2034,7 @@ export default function GraphEditor({
       return;
     }
 
-    // pan
+    // Сдвиг видимой области.
     if (panRef.current) {
       const p = panRef.current;
       if (e.pointerId !== p.pointerId) return;
@@ -2073,7 +2083,7 @@ export default function GraphEditor({
       return;
     }
 
-    // point drag + tooltip
+    // Перетаскивание точки и подсказка рядом с ней.
     if (pointDragRef.current) {
       const d = pointDragRef.current;
       if (e.pointerId !== d.pointerId) return;
@@ -2133,7 +2143,7 @@ export default function GraphEditor({
       return;
     }
 
-    // finish tick drag
+    // Завершение перетаскивания подписи оси.
     if (tickDragRef.current) {
       const t = tickDragRef.current;
       if (e.pointerId !== t.pointerId) return;
@@ -2150,7 +2160,7 @@ export default function GraphEditor({
       return;
     }
 
-    // finish pan
+    // Завершение сдвига видимой области.
     if (panRef.current) {
       const p = panRef.current;
       if (e.pointerId !== p.pointerId) return;
@@ -2165,7 +2175,7 @@ export default function GraphEditor({
       return;
     }
 
-    // finish point drag
+    // Завершение перетаскивания точки.
     if (autoSplinePointDragRef.current) {
       const d = autoSplinePointDragRef.current;
       if (e.pointerId !== d.pointerId) return;
@@ -2374,7 +2384,7 @@ export default function GraphEditor({
           </Button>
         )}
 
-        {/* dropdown: show/hide curves */}
+        {/* Выбор видимых кривых */}
         <div className="relative" ref={visRef}>
           <Button
             variant="secondary"
@@ -2487,7 +2497,7 @@ export default function GraphEditor({
             <div className="text-xs text-slate-500 dark:text-slate-400">{pointRadius}px</div>
           </div>
 
-          {/* Color select for active series */}
+          {/* Цвет активной кривой */}
           {activeSeries && (
             <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 ring-1 ring-slate-200 dark:bg-slate-950 dark:ring-slate-800">
               <span className="text-xs text-slate-600 dark:text-slate-300">Цвет</span>
@@ -2822,7 +2832,7 @@ export default function GraphEditor({
             strokeWidth={1}
           />
 
-          {/* curves + points */}
+          {/* Кривые и точки */}
           <g clipPath={`url(#${clipId})`}>
             {[...paths.filter((p) => p.id !== activeSeriesId), ...paths.filter((p) => p.id === activeSeriesId)].map((p) => {
               const cIdx = colorById[p.id] ?? 0;
@@ -2966,7 +2976,7 @@ export default function GraphEditor({
             </text>
           )}
 
-          {/* HITBOX overlays */}
+          {/* Невидимые области для перетаскивания сетки */}
           {gridDragAxis === "x" && warpX && (
             <g>
               {ticksX.map((t, i) => {

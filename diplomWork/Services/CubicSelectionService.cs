@@ -21,6 +21,7 @@ public sealed class CubicSelectionService
             selected.Sort();
             var interpolate = BuildInterpolator(selected.Select(index => sortedPoints[index]).ToList());
 
+            // Добавляем ту точку, где текущая кривая сильнее всего ошибается.
             int? bestIndex = null;
             var bestError = double.NegativeInfinity;
             var selectedSet = selected.ToHashSet();
@@ -51,6 +52,7 @@ public sealed class CubicSelectionService
 
         selected.Sort();
 
+        // После грубого выбора немного двигаем внутренние точки, чтобы линия стала ближе к исходной.
         for (var pass = 0; pass < Math.Max(0, refinePasses); pass++)
         {
             var improved = false;
@@ -126,6 +128,7 @@ public sealed class CubicSelectionService
         var bestMaxError = double.PositiveInfinity;
         var bestRmse = double.PositiveInfinity;
 
+        // Пробуем разное число точек и останавливаемся, когда разница уже достаточно мала.
         for (var totalPoints = effectiveMinimum; totalPoints <= count; totalPoints++)
         {
             var candidate = SelectCubicSplinePoints(sortedPoints, totalPoints, metric, refinePasses, refineRadius);
